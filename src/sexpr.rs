@@ -7,14 +7,14 @@ use nom::multi::many0;
 use nom::sequence::{delimited, preceded, terminated};
 use nom::IResult;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub struct Sexpr {
     pub comment: Option<String>,
     pub operator: Option<char>,
     pub contents: SexprBody,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum SexprBody {
     Atom(String),
     List(Vec<Sexpr>),
@@ -113,5 +113,156 @@ fn list_tail(i: &str) -> IResult<&str, SexprBody> {
 }
 
 pub fn sexpr_file(i: &str) -> IResult<&str, Sexpr> {
-    all_consuming(preceded(multispace0, prefixed_sexpr(sexpr)))(i)
+    let (rest, body) = all_consuming(preceded(multispace0, sexpr))(i)?;
+    Ok((
+        rest,
+        Sexpr {
+            comment: None,
+            operator: None,
+            contents: body,
+        },
+    ))
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn new_atom(s: &str) -> Sexpr {
+        Sexpr {
+            comment: None,
+            operator: None,
+            contents: SexprBody::Atom(s.to_string()),
+        }
+    }
+
+    fn new_list(exprs: Vec<Sexpr>) -> Sexpr {
+        Sexpr {
+            comment: None,
+            operator: None,
+            contents: SexprBody::List(exprs),
+        }
+    }
+
+    #[test]
+    fn atom() {
+        assert_eq!(
+            sexpr_file("x").unwrap(),
+            ("", new_list(vec![new_atom("x")]))
+        );
+    }
+
+    #[test]
+    fn list() {
+        assert_eq!(
+            sexpr_file("(x y z)").unwrap(),
+            (
+                "",
+                new_list(vec![new_list(
+                    vec!["x", "y", "z"].into_iter().map(new_atom).collect()
+                )])
+            )
+        );
+    }
+
+    #[test]
+    fn leading_whitespace() {
+        assert_eq!(
+            sexpr_file(" \n x").unwrap(),
+            ("", new_list(vec![new_atom("x")]))
+        )
+    }
+
+    #[test]
+    fn trailing_whitespace() {
+        assert_eq!(
+            sexpr_file("x \n ").unwrap(),
+            ("", new_list(vec![new_atom("x")]))
+        )
+    }
+
+    #[test]
+    fn operators() {
+        assert_eq!(
+            sexpr_file("let $x (fn $y #(y y)) x").unwrap(),
+            (
+                "",
+                new_list(vec![
+                    new_atom("let"),
+                    Sexpr {
+                        comment: None,
+                        operator: Some('$'),
+                        contents: SexprBody::Atom("x".to_string())
+                    },
+                    new_list(vec![
+                        new_atom("fn"),
+                        Sexpr {
+                            comment: None,
+                            operator: Some('$'),
+                            contents: SexprBody::Atom("y".to_string())
+                        },
+                        Sexpr {
+                            comment: None,
+                            operator: Some('#'),
+                            contents: SexprBody::List(vec![new_atom("y"), new_atom("y")])
+                        }
+                    ]),
+                    new_atom("x")
+                ])
+            )
+        )
+    }
+
+    #[test]
+    fn comments() {
+        assert_eq!(
+            sexpr_file("{a comment} a ({another comment} b c)").unwrap(),
+            (
+                "",
+                new_list(vec![
+                    Sexpr {
+                        comment: Some("a comment".to_string()),
+                        operator: None,
+                        contents: SexprBody::Atom("a".to_string()),
+                    },
+                    new_list(vec![
+                        Sexpr {
+                            comment: Some("another comment".to_string()),
+                            operator: None,
+                            contents: SexprBody::Atom("b".to_string())
+                        },
+                        new_atom("c")
+                    ])
+                ])
+            )
+        )
+    }
+
+    #[test]
+    fn semicolon() {
+        assert_eq!(
+            sexpr_file("a; b; (c; d)").unwrap(),
+            (
+                "",
+                new_list(vec![
+                    new_atom("a"),
+                    new_list(vec![
+                        new_atom("b"),
+                        new_list(vec![new_list(vec![
+                            new_atom("c"),
+                            new_list(vec![new_atom("d")])
+                        ])])
+                    ])
+                ])
+            )
+        )
+    }
+
+    #[test]
+    fn quotation() {
+        assert_eq!(
+            sexpr_file("[abc \\\\ \\] def]").unwrap(),
+            ("", new_list(vec![new_atom("abc \\ ] def")]))
+        )
+    }
 }
