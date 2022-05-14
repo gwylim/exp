@@ -82,7 +82,8 @@ This eliminates the large number of closing parentheses typical of Lisp.
       ; if (eq 0 count) x
       ; f (iterate f (sub count 1) x)
       )
-    ; iterate (fn $x; add 1 x) 5 2
+    ; let $y 1
+    ; iterate (fn $x; add y x) 5 2
     => 7
 
 ### Algebraic data types
