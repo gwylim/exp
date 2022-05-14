@@ -6,3 +6,4 @@ edition = "2018"
 [dependencies]
 nom = "7"
 clap = { version = "3.1.18", features = ["derive"] }
+regex = "1"

@@ -33,5 +33,5 @@ fn main() {
     let input = fs::read_to_string(file).expect("Failed to read file");
     let sexpr: Sexpr = sexpr::sexpr_file(&input).expect("Failed to parse sexpr").1;
     let program: Expr = compile(&sexpr).expect("Syntax error");
-    println!("{:#?}", run(&program).expect("Exception in execution"));
+    println!("{}", run(&program).expect("Exception in execution"));
 }
