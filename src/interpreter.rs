@@ -4,7 +4,7 @@ use crate::program::{Expr, PatternExpr};
 use crate::value::{RunResult, RuntimeError, Value};
 use std::cell::RefCell;
 use std::cmp::min;
-use std::collections::VecDeque;
+use std::collections::vec_deque::VecDeque;
 use std::rc::Rc;
 
 fn apply<'a>(
@@ -187,4 +187,80 @@ fn run_inner<'a>(
 
 pub fn run(expr: &Expr) -> RunResult {
     run_inner(&mut RefCell::new(0), expr, &mut VecDeque::new())
+}
+
+#[cfg(test)]
+mod test {
+    use crate::sexpr::sexpr_file;
+    use crate::value::Value;
+    use crate::{compile, run};
+
+    // We pass a callback since the Expr doesn't live past this function and isn't owned by the
+    // Value
+    fn eval<F>(s: &str, f: F)
+    where
+        F: Fn(&Value),
+    {
+        f(&*run(&compile(&sexpr_file(s).unwrap().1).unwrap()).unwrap())
+    }
+
+    #[test]
+    fn variable_binding() {
+        eval(&"let $x 1 (let $y 2 x)", |val| {
+            assert_eq!(val, &Value::Number(1.0))
+        })
+    }
+
+    #[test]
+    fn function_definition() {
+        eval(&"let $f (fn $x; add x x); f 1", |val| {
+            assert_eq!(val, &Value::Number(2.0))
+        })
+    }
+
+    #[test]
+    fn if_statement() {
+        eval(&"if (eq 0 1) 1; if (eq 0 0) 2 3", |val| {
+            assert_eq!(val, &Value::Number(2.0))
+        })
+    }
+
+    #[test]
+    fn tuple_matching() {
+        eval(&"match #(1 \"[a string]) (1 $s) s (2 0) 0", |val| {
+            assert_eq!(val, &Value::String("a string".to_string()))
+        })
+    }
+
+    #[test]
+    #[should_panic]
+    fn match_type_error() {
+        eval(
+            &"match #(1 \"[a string]) (1 $s) s (\"[a string] 1) 1",
+            |_val| {},
+        )
+    }
+
+    #[test]
+    fn recursion() {
+        eval(
+            &"let $fac (fn $n; if (eq n 0) 1; mul n; fac; sub n 1); fac 7",
+            |val| assert_eq!(val, &Value::Number(5040.0)),
+        )
+    }
+
+    #[test]
+    fn closure() {
+        eval(
+            &"let $create_closure (fn $x; fn $y; add x y); let $f (create_closure 2); f 3",
+            |val| assert_eq!(val, &Value::Number(5.0)),
+        )
+    }
+
+    #[test]
+    fn labels() {
+        eval(&"let $l1 label; let $l2 label; match l1 l1 1 l2 2", |val| {
+            assert_eq!(val, &Value::Number(1.0))
+        })
+    }
 }

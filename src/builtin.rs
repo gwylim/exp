@@ -1,6 +1,6 @@
 use crate::eq::eq;
 use crate::value::{RunResult, RuntimeError, Value};
-use std::collections::VecDeque;
+use std::collections::vec_deque::VecDeque;
 use std::io;
 use std::rc::Rc;
 

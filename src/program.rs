@@ -1,7 +1,7 @@
 use crate::builtin::{get_builtin, Builtin};
 use crate::program::ParseError::InvalidVariableBinding;
 use crate::sexpr::{Sexpr, SexprBody};
-use std::collections::VecDeque;
+use std::collections::vec_deque::VecDeque;
 use std::iter::once;
 
 #[derive(Debug)]
@@ -336,14 +336,22 @@ fn compile_case<'a>(
 ) -> ParseResult<(PatternExpr, Box<Expr>, Vec<usize>)> {
     let mut defined_vars = Vec::new();
     let (pattern, pattern_used_vars) = compile_pattern(pattern_sexpr, env, &mut defined_vars)?;
-    for var in &defined_vars {
+    let var_count = defined_vars.len();
+    for var in defined_vars {
         env.push_front(var);
     }
     let (body, body_used_vars) = compile_sexpr(body_sexpr, env)?;
-    for _ in defined_vars {
+    for _ in 0..var_count {
         env.pop_front();
     }
-    Ok((*pattern, body, merge(&pattern_used_vars, &body_used_vars)))
+    Ok((
+        *pattern,
+        body,
+        merge(
+            &pattern_used_vars,
+            &parent_used_vars(body_used_vars, var_count),
+        ),
+    ))
 }
 
 fn compile_cases<'a>(

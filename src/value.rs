@@ -1,4 +1,5 @@
 use crate::builtin::Builtin;
+use crate::eq::eq;
 use crate::Expr;
 use std::rc::Rc;
 
@@ -18,6 +19,12 @@ pub enum Value<'a> {
     // This is used for a recursive reference to a closure
     Recurse,
     Label(u64),
+}
+
+impl<'a> PartialEq for Value<'a> {
+    fn eq(&self, other: &Self) -> bool {
+        eq(self, other).unwrap()
+    }
 }
 
 #[derive(Debug)]
