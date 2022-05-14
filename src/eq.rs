@@ -1,5 +1,5 @@
 use crate::value::{RuntimeError, Value};
-use std::cmp::min;
+use std::iter::zip;
 
 pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
     match x {
@@ -26,15 +26,16 @@ pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
         }
         Value::Vec(vec) => {
             if let Value::Vec(vec1) = y {
-                for i in 0..min(vec.len(), vec1.len()) {
-                    if !eq(&vec[i], &vec1[i])? {
-                        return Ok(false);
-                    }
-                }
                 if vec.len() != vec1.len() {
                     return Err(RuntimeError::TypeError);
                 }
-                Ok(true)
+                let mut matched = true;
+                for (x, y) in zip(vec, vec1) {
+                    if !eq(x, y)? {
+                        matched = false;
+                    }
+                }
+                Ok(matched)
             } else {
                 Err(RuntimeError::TypeError)
             }
@@ -46,9 +47,30 @@ pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
                 Err(RuntimeError::TypeError)
             }
         }
-        Value::Label(n) => {
-            if let Value::Label(n1) = y {
-                Ok(*n == *n1)
+        Value::Constructed {
+            type_id,
+            index,
+            values,
+        } => {
+            if let Value::Constructed {
+                type_id: type_id1,
+                index: index1,
+                values: values1,
+            } = y
+            {
+                if type_id != type_id1 {
+                    return Err(RuntimeError::TypeError);
+                }
+                if index != index1 {
+                    return Ok(false);
+                }
+                let mut matched = true;
+                for (v, v1) in zip(values, values1) {
+                    if !eq(v, v1)? {
+                        matched = false;
+                    }
+                }
+                Ok(matched)
             } else {
                 Err(RuntimeError::TypeError)
             }

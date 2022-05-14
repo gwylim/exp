@@ -13,6 +13,8 @@ pub enum ParseError {
     InvalidExpressionInPattern,
     InvalidSyntax,
     InvalidNumericLiteral(String),
+    // Intending to support named fields, but for now they must always be _
+    InvalidFieldDeclaration,
 }
 
 // An expression together with indices of variables which it uses from its environment
@@ -32,6 +34,10 @@ fn result_with_vars<E>(expr: E, used_vars: Vec<usize>) -> ExprResult<E> {
 pub enum PatternExpr {
     BindVar,
     Vec(Vec<Box<PatternExpr>>),
+    Constructed {
+        constructor: usize,
+        arguments: Vec<Box<PatternExpr>>,
+    },
     // TODO: maybe can avoid duplicating this with Expr
     NumericConstant(f64),
     StringConstant(String),
@@ -73,12 +79,15 @@ pub enum Expr {
         value: Box<Expr>,
         cases: Vec<(PatternExpr, Box<Expr>)>,
     },
-    Label,
+    // A type declaration is a list of constructors, each characterized by an arity
+    TypeDeclaration {
+        constructors: Vec<usize>,
+        body: Box<Expr>,
+    },
 }
 
-fn lookup(var: &str, env: &VecDeque<&str>) -> Option<(Box<Expr>, Vec<usize>)> {
-    let i = env.iter().position(|s| var.eq(*s))?;
-    Some((Box::new(Expr::Bound(i)), vec![i]))
+fn lookup(var: &str, env: &VecDeque<&str>) -> Option<usize> {
+    env.iter().position(|s| var.eq(*s))
 }
 
 fn compile_atom(s: &str, operator: Option<&char>, env: &VecDeque<&str>) -> ExprResult<Expr> {
@@ -97,14 +106,11 @@ fn compile_atom(s: &str, operator: Option<&char>, env: &VecDeque<&str>) -> ExprR
                 if s == "false" {
                     return result(Expr::BooleanConstant(false));
                 }
-                if s == "label" {
-                    return result(Expr::Label);
-                }
                 match lookup(s, env) {
                     None => get_builtin(s)
                         .map(|b| result(Expr::Builtin(b)))
                         .unwrap_or(Err(ParseError::UndefinedVariable(s.to_string()))),
-                    Some(r) => Ok(r),
+                    Some(i) => result_with_vars(Expr::Bound(i), vec![i]),
                 }
             }
         }
@@ -172,6 +178,10 @@ fn var_count(pattern: &PatternExpr) -> usize {
         PatternExpr::BooleanConstant(_) => 0,
         PatternExpr::Unit => 0,
         PatternExpr::Bound(_) => 0,
+        PatternExpr::Constructed {
+            constructor: _,
+            arguments,
+        } => arguments.iter().map(|pattern| var_count(pattern)).sum(),
     }
 }
 
@@ -229,7 +239,9 @@ fn check_no_recursion(name: &str, expr: &Expr, level: usize) -> ParseResult<()> 
         Expr::BooleanConstant(_) => {}
         Expr::Unit => {}
         Expr::Builtin(_) => {}
-        Expr::Label => {}
+        Expr::TypeDeclaration { constructors, body } => {
+            check_no_recursion(name, body, level + constructors.len())?;
+        }
     }
     Ok(())
 }
@@ -281,7 +293,9 @@ fn check_recursion_guarded(name: &str, expr: &Expr, level: usize) -> ParseResult
         Expr::Unit => {}
         Expr::Function { .. } => {}
         Expr::Builtin(_) => {}
-        Expr::Label => {}
+        Expr::TypeDeclaration { constructors, body } => {
+            check_recursion_guarded(name, body, level + constructors.len())?;
+        }
     }
     Ok(())
 }
@@ -302,7 +316,7 @@ fn compile_pattern<'a>(
         }
         Sexpr {
             contents: SexprBody::List(v),
-            operator: None,
+            operator: Some('#'),
             comment: _,
         } => {
             let mut patterns = Vec::with_capacity(v.len());
@@ -313,6 +327,42 @@ fn compile_pattern<'a>(
                 used_vars = merge(&used_vars, &pattern_used_vars);
             }
             result_with_vars(PatternExpr::Vec(patterns), used_vars)
+        }
+        Sexpr {
+            contents: SexprBody::List(v),
+            operator: None,
+            comment: _,
+        } => {
+            if v.len() < 1 {
+                return Err(ParseError::InvalidSyntax);
+            }
+            let constructor = match &v[0] {
+                Sexpr {
+                    contents: SexprBody::Atom(s),
+                    operator: None,
+                    comment: _,
+                } => match lookup(s, env) {
+                    None => {
+                        return Err(ParseError::UndefinedVariable(s.to_string()));
+                    }
+                    Some(i) => i,
+                },
+                _ => return Err(ParseError::InvalidSyntax),
+            };
+            let mut patterns = Vec::with_capacity(v.len());
+            let mut used_vars = vec![constructor];
+            for sexpr in &v[1..] {
+                let (pattern, pattern_used_vars) = compile_pattern(sexpr, env, vars)?;
+                patterns.push(pattern);
+                used_vars = merge(&used_vars, &pattern_used_vars);
+            }
+            result_with_vars(
+                PatternExpr::Constructed {
+                    constructor,
+                    arguments: patterns,
+                },
+                used_vars,
+            )
         }
         _ => {
             let (expr, used_vars) = compile_sexpr(sexpr, env)?;
@@ -370,6 +420,57 @@ fn compile_cases<'a>(
         used_vars = merge(&used_vars, &case_used_vars);
     }
     Ok((cases, used_vars))
+}
+
+fn compile_data_constructor<'a>(
+    sexpr: &'a Sexpr,
+    env: &mut VecDeque<&'a str>,
+) -> ParseResult<usize> {
+    match sexpr {
+        Sexpr {
+            comment: _,
+            operator: Some('$'),
+            contents: SexprBody::Atom(s),
+        } => {
+            env.push_front(s);
+            Ok(0)
+        }
+        Sexpr {
+            comment: _,
+            operator: None,
+            contents: SexprBody::List(vec),
+        } => {
+            if vec.len() < 2 {
+                return Err(ParseError::InvalidSyntax);
+            }
+            if let Sexpr {
+                contents: SexprBody::Atom(s),
+                operator: Some('$'),
+                comment: _,
+            } = &vec[0]
+            {
+                env.push_front(s);
+            } else {
+                return Err(ParseError::InvalidSyntax);
+            }
+            for v in &vec[1..vec.len()] {
+                if let Sexpr {
+                    comment: _,
+                    operator: None,
+                    contents: SexprBody::Atom(s),
+                } = v
+                {
+                    if s != "_" {
+                        return Err(ParseError::InvalidFieldDeclaration);
+                    }
+                } else {
+                    return Err(ParseError::InvalidFieldDeclaration);
+                }
+            }
+            Ok(vec.len() - 1)
+        }
+        _ => Err(ParseError::InvalidSyntax),
+    }
 }
 
 fn compile_form<'a>(
@@ -462,6 +563,27 @@ fn compile_form<'a>(
                 merge(&value_used_vars, &cases_used_vars),
             )
         }
+        "data" => {
+            if rest.len() < 2 {
+                return Err(ParseError::InvalidSyntax);
+            }
+            let mut var_counts = Vec::new();
+            for sexpr in &rest[..rest.len() - 1] {
+                var_counts.push(compile_data_constructor(sexpr, env)?);
+            }
+            let constructor_count = var_counts.len();
+            let (body, body_used_vars) = compile_sexpr(&rest.last().unwrap(), env)?;
+            for _ in 0..constructor_count {
+                env.pop_front();
+            }
+            result_with_vars(
+                Expr::TypeDeclaration {
+                    constructors: var_counts,
+                    body,
+                },
+                parent_used_vars(body_used_vars, constructor_count),
+            )
+        }
         v => apply(compile_atom(v, None, env)?, rest, env),
     }
 }
@@ -547,6 +669,19 @@ fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize])
         PatternExpr::StringConstant(_) => pattern_expr,
         PatternExpr::BooleanConstant(_) => pattern_expr,
         PatternExpr::Unit => pattern_expr,
+        PatternExpr::Constructed {
+            constructor,
+            arguments,
+        } => PatternExpr::Constructed {
+            constructor: current_env_map
+                .iter()
+                .position(|j| constructor == *j)
+                .unwrap(),
+            arguments: arguments
+                .into_iter()
+                .map(|e| Box::new(rewrite_env_map_pattern(*e, current_env_map)))
+                .collect(),
+        },
     }
 }
 
@@ -637,7 +772,15 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
         Expr::BooleanConstant(_) => expr,
         Expr::Unit => expr,
         Expr::Builtin(_) => expr,
-        Expr::Label => expr,
+        Expr::TypeDeclaration { constructors, body } => {
+            let child_env_map: Vec<usize> = (0..constructors.len())
+                .chain(current_env_map.iter().map(|i| constructors.len() + i))
+                .collect();
+            Expr::TypeDeclaration {
+                constructors,
+                body: rewrite_env_maps(*body, &child_env_map),
+            }
+        }
     })
 }
 

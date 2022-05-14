@@ -22,7 +22,16 @@ pub enum Value<'a> {
     },
     // This is used for a recursive reference to a closure
     Recurse,
-    Label(u64),
+    Constructor {
+        type_id: u64,
+        index: usize,
+        arity: usize,
+    },
+    Constructed {
+        type_id: u64,
+        index: usize,
+        values: Vec<Rc<Value<'a>>>,
+    },
 }
 
 impl<'a> PartialEq for Value<'a> {
@@ -51,18 +60,37 @@ impl<'a> Display for Value<'a> {
                         " ".fmt(f)?;
                     }
                 }
-                write!(f, ")")?;
-                Ok(())
+                write!(f, ")")
             }
             Value::Closure { .. } => write!(f, "<closure>"),
             Value::Recurse => write!(f, "<recurse>"),
-            Value::Label(i) => write!(f, "<label {}>", i),
+            Value::Constructor {
+                type_id,
+                index,
+                arity: _,
+            } => write!(f, "<constructor {} {}>", type_id, index),
+            Value::Constructed {
+                type_id,
+                index,
+                values,
+            } => {
+                if values.is_empty() {
+                    return write!(f, "<constructed {} {}>", type_id, index);
+                }
+                write!(f, "(<constructed {} {}>", type_id, index)?;
+                for v in values {
+                    write!(f, " ")?;
+                    v.fmt(f)?;
+                }
+                write!(f, ")")
+            }
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum RuntimeError {
+    InvalidConstructorPattern,
     MultiplePatternsMatched,
     NoPatternsMatched,
     InvalidNumberOfArguments { expected: usize, received: usize },
