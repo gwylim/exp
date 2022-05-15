@@ -1,32 +1,36 @@
 use crate::builtin::{get_builtin, Builtin};
-use crate::program::ParseError::InvalidVariableBinding;
-use crate::sexpr::{Sexpr, SexprBody};
+use crate::located::Located;
+use crate::sexpr::{unescape_string, Sexpr};
+use crate::token::{Keyword, Token};
+use crate::{parse, InvalidTokenError};
 use std::collections::vec_deque::VecDeque;
+use std::convert::TryFrom;
 use std::iter::once;
+use std::ops::Range;
 
 #[derive(Debug)]
 pub enum ParseError {
-    UnexpectedOperator(char),
+    InvalidToken(InvalidTokenError),
+    UnexpectedCharacter,
+    UnexpectedToken,
     InvalidVariableBinding,
-    CyclicDefinition(String),
-    UndefinedVariable(String),
+    CyclicDefinition,
+    UndefinedVariable,
     InvalidExpressionInPattern,
     InvalidSyntax,
-    InvalidNumericLiteral(String),
     // Intending to support named fields, but for now they must always be _
     InvalidFieldDeclaration,
+    EmptyInput,
 }
 
-// An expression together with indices of variables which it uses from its environment
-type ParseResult<O> = Result<O, ParseError>;
-
-type ExprResult<E> = ParseResult<(Box<E>, Vec<usize>)>;
-
-fn result<E>(expr: E) -> ExprResult<E> {
+fn result<Expr, E>(expr: Expr) -> Result<(Box<Expr>, Vec<usize>), E> {
     Ok((Box::new(expr), Vec::new()))
 }
 
-fn result_with_vars<E>(expr: E, used_vars: Vec<usize>) -> ExprResult<E> {
+fn result_with_vars<Expr, E>(
+    expr: Expr,
+    used_vars: Vec<usize>,
+) -> Result<(Box<Expr>, Vec<usize>), E> {
     Ok((Box::new(expr), used_vars))
 }
 
@@ -90,31 +94,18 @@ fn lookup(var: &str, env: &VecDeque<&str>) -> Option<usize> {
     env.iter().position(|s| var.eq(*s))
 }
 
-fn compile_atom(s: &str, operator: Option<&char>, env: &VecDeque<&str>) -> ExprResult<Expr> {
-    match operator {
-        Some(&'"') => result(Expr::StringConstant(s.to_string())),
-        None => {
-            let first: char = s.chars().nth(0).unwrap();
-            if first.is_numeric() || first == '-' {
-                s.parse()
-                    .map(|value| result(Expr::NumericConstant(value)))
-                    .unwrap_or(Err(ParseError::InvalidNumericLiteral(s.to_string())))
-            } else {
-                if s == "true" {
-                    return result(Expr::BooleanConstant(true));
-                }
-                if s == "false" {
-                    return result(Expr::BooleanConstant(false));
-                }
-                match lookup(s, env) {
-                    None => get_builtin(s)
-                        .map(|b| result(Expr::Builtin(b)))
-                        .unwrap_or(Err(ParseError::UndefinedVariable(s.to_string()))),
-                    Some(i) => result_with_vars(Expr::Bound(i), vec![i]),
-                }
-            }
-        }
-        Some(c) => Err(ParseError::UnexpectedOperator(*c)),
+fn compile_atom(atom: &Token, env: &VecDeque<&str>) -> Result<(Box<Expr>, Vec<usize>), ParseError> {
+    match atom {
+        Token::StringLiteral(s) => result(Expr::StringConstant(s.to_string())),
+        Token::NumericLiteral(x) => result(Expr::NumericConstant(*x)),
+        Token::BooleanLiteral(b) => result(Expr::BooleanConstant(*b)),
+        Token::Identifier(s) => match lookup(s, env) {
+            None => get_builtin(s)
+                .map(|b| result(Expr::Builtin(b)))
+                .unwrap_or(Err(ParseError::UndefinedVariable)),
+            Some(i) => result_with_vars(Expr::Bound(i), vec![i]),
+        },
+        _ => Err(ParseError::InvalidSyntax),
     }
 }
 
@@ -156,15 +147,14 @@ fn parent_used_vars(used_vars: Vec<usize>, count: usize) -> Vec<usize> {
         .collect()
 }
 
-fn read_function_vars(list: &[Sexpr]) -> ParseResult<Vec<&str>> {
+fn read_function_vars(list: &[Located<Sexpr<Token>>]) -> Result<Vec<&str>, Located<ParseError>> {
     list.iter()
-        .map(|sexpr| match sexpr {
-            Sexpr {
-                contents: SexprBody::Atom(s),
-                operator: Some('$'),
-                comment: _,
-            } => Ok(s.as_ref()),
-            _ => Err(InvalidVariableBinding),
+        .map(|sexpr| match &sexpr.value {
+            Sexpr::Atom(Token::IdentifierBinding(s)) => Ok(s.as_deref().unwrap_or("")),
+            _ => Err(Located::new(
+                sexpr.source_range.clone(),
+                ParseError::InvalidVariableBinding,
+            )),
         })
         .collect()
 }
@@ -185,7 +175,7 @@ fn var_count(pattern: &PatternExpr) -> usize {
     }
 }
 
-fn check_no_recursion(name: &str, expr: &Expr, level: usize) -> ParseResult<()> {
+fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
     match expr {
         Expr::Function {
             arity: _,
@@ -193,30 +183,30 @@ fn check_no_recursion(name: &str, expr: &Expr, level: usize) -> ParseResult<()> 
             env_map,
         } => {
             if env_map.contains(&level) {
-                return Err(ParseError::CyclicDefinition(name.to_string()));
+                return Err(ParseError::CyclicDefinition);
             }
         }
         Expr::Bound(i) => {
             if *i == level {
-                return Err(ParseError::CyclicDefinition(name.to_string()));
+                return Err(ParseError::CyclicDefinition);
             }
         }
         Expr::Apply {
             function,
             arguments,
         } => {
-            check_no_recursion(name, function, level)?;
+            check_no_recursion(function, level)?;
             for arg in arguments {
-                check_no_recursion(name, arg, level)?;
+                check_no_recursion(arg, level)?;
             }
         }
         Expr::Let { value, body } => {
-            check_no_recursion(name, value, level + 1)?;
-            check_no_recursion(name, body, level + 1)?;
+            check_no_recursion(value, level + 1)?;
+            check_no_recursion(body, level + 1)?;
         }
         Expr::Vec(vec) => {
             for e in vec {
-                check_no_recursion(name, e, level)?;
+                check_no_recursion(e, level)?;
             }
         }
         Expr::If {
@@ -224,14 +214,14 @@ fn check_no_recursion(name: &str, expr: &Expr, level: usize) -> ParseResult<()> 
             true_branch,
             false_branch,
         } => {
-            check_no_recursion(name, condition, level)?;
-            check_no_recursion(name, true_branch, level)?;
-            check_no_recursion(name, false_branch, level)?;
+            check_no_recursion(condition, level)?;
+            check_no_recursion(true_branch, level)?;
+            check_no_recursion(false_branch, level)?;
         }
         Expr::Match { value, cases } => {
-            check_no_recursion(name, value, level)?;
+            check_no_recursion(value, level)?;
             for (pattern, body) in cases {
-                check_no_recursion(name, body, level + var_count(pattern))?;
+                check_no_recursion(body, level + var_count(pattern))?;
             }
         }
         Expr::NumericConstant(_) => {}
@@ -240,36 +230,36 @@ fn check_no_recursion(name: &str, expr: &Expr, level: usize) -> ParseResult<()> 
         Expr::Unit => {}
         Expr::Builtin(_) => {}
         Expr::TypeDeclaration { constructors, body } => {
-            check_no_recursion(name, body, level + constructors.len())?;
+            check_no_recursion(body, level + constructors.len())?;
         }
     }
     Ok(())
 }
 
 // Checks that no references to bound variable at index 0 exist which aren't guarded by a function
-fn check_recursion_guarded(name: &str, expr: &Expr, level: usize) -> ParseResult<()> {
+fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> {
     match expr {
         Expr::Bound(i) => {
             if *i == level {
-                return Err(ParseError::CyclicDefinition(name.to_string()));
+                return Err(ParseError::CyclicDefinition);
             }
         }
         Expr::Apply {
             function,
             arguments,
         } => {
-            check_no_recursion(name, function, level)?;
+            check_no_recursion(function, level)?;
             for argument in arguments {
-                check_no_recursion(name, argument, level)?;
+                check_no_recursion(argument, level)?;
             }
         }
         Expr::Let { value, body } => {
-            check_no_recursion(name, value, level + 1)?;
-            check_recursion_guarded(name, body, level + 1)?;
+            check_no_recursion(value, level + 1)?;
+            check_recursion_guarded(body, level + 1)?;
         }
         Expr::Vec(vec) => {
             for expr in vec {
-                check_no_recursion(name, expr, level)?;
+                check_no_recursion(expr, level)?;
             }
         }
         Expr::If {
@@ -277,14 +267,14 @@ fn check_recursion_guarded(name: &str, expr: &Expr, level: usize) -> ParseResult
             true_branch,
             false_branch,
         } => {
-            check_no_recursion(name, condition, level)?;
-            check_recursion_guarded(name, true_branch, level)?;
-            check_recursion_guarded(name, false_branch, level)?;
+            check_no_recursion(condition, level)?;
+            check_recursion_guarded(true_branch, level)?;
+            check_recursion_guarded(false_branch, level)?;
         }
         Expr::Match { value, cases } => {
-            check_no_recursion(name, value, level)?;
+            check_no_recursion(value, level)?;
             for (pattern, body) in cases {
-                check_recursion_guarded(name, body, level + var_count(pattern))?;
+                check_recursion_guarded(body, level + var_count(pattern))?;
             }
         }
         Expr::NumericConstant(_) => {}
@@ -294,75 +284,69 @@ fn check_recursion_guarded(name: &str, expr: &Expr, level: usize) -> ParseResult
         Expr::Function { .. } => {}
         Expr::Builtin(_) => {}
         Expr::TypeDeclaration { constructors, body } => {
-            check_recursion_guarded(name, body, level + constructors.len())?;
+            check_recursion_guarded(body, level + constructors.len())?;
         }
     }
     Ok(())
 }
 
 fn compile_pattern<'a>(
-    sexpr: &'a Sexpr,
+    sexpr: &'a Located<Sexpr<Token>>,
     env: &mut VecDeque<&'a str>,
     vars: &mut Vec<&'a str>,
-) -> ExprResult<PatternExpr> {
-    match sexpr {
-        Sexpr {
-            contents: SexprBody::Atom(s),
-            operator: Some('$'),
-            comment: _,
-        } => {
-            vars.push(s);
+) -> Result<(Box<PatternExpr>, Vec<usize>), Located<ParseError>> {
+    match &sexpr.value {
+        Sexpr::Atom(Token::IdentifierBinding(s)) => {
+            vars.push(s.as_deref().unwrap_or(""));
             result(PatternExpr::BindVar)
         }
-        Sexpr {
-            contents: SexprBody::List(v),
-            operator: Some('#'),
-            comment: _,
-        } => {
-            let mut patterns = Vec::with_capacity(v.len());
-            let mut used_vars = vec![];
-            for sexpr in v {
-                let (pattern, pattern_used_vars) = compile_pattern(sexpr, env, vars)?;
-                patterns.push(pattern);
-                used_vars = merge(&used_vars, &pattern_used_vars);
+        Sexpr::List(list) => {
+            if list.len() < 1 {
+                return Err(Located::new(
+                    sexpr.source_range.clone(),
+                    ParseError::InvalidSyntax,
+                ));
             }
-            result_with_vars(PatternExpr::Vec(patterns), used_vars)
-        }
-        Sexpr {
-            contents: SexprBody::List(v),
-            operator: None,
-            comment: _,
-        } => {
-            if v.len() < 1 {
-                return Err(ParseError::InvalidSyntax);
-            }
-            let constructor = match &v[0] {
-                Sexpr {
-                    contents: SexprBody::Atom(s),
-                    operator: None,
-                    comment: _,
-                } => match lookup(s, env) {
-                    None => {
-                        return Err(ParseError::UndefinedVariable(s.to_string()));
+            let (first, rest) = list.split_first().unwrap();
+            match &first.value {
+                Sexpr::Atom(Token::Keyword(Keyword::Tuple)) => {
+                    let mut patterns = Vec::with_capacity(rest.len());
+                    let mut used_vars = vec![];
+                    for sexpr in rest {
+                        let (pattern, pattern_used_vars) = compile_pattern(sexpr, env, vars)?;
+                        patterns.push(pattern);
+                        used_vars = merge(&used_vars, &pattern_used_vars);
                     }
-                    Some(i) => i,
-                },
-                _ => return Err(ParseError::InvalidSyntax),
-            };
-            let mut patterns = Vec::with_capacity(v.len());
-            let mut used_vars = vec![constructor];
-            for sexpr in &v[1..] {
-                let (pattern, pattern_used_vars) = compile_pattern(sexpr, env, vars)?;
-                patterns.push(pattern);
-                used_vars = merge(&used_vars, &pattern_used_vars);
+                    result_with_vars(PatternExpr::Vec(patterns), used_vars)
+                }
+                Sexpr::Atom(Token::Identifier(s)) => {
+                    let constructor = match lookup(s, env) {
+                        None => Err(Located::new(
+                            first.source_range.clone(),
+                            ParseError::UndefinedVariable,
+                        )),
+                        Some(i) => Ok(i),
+                    }?;
+                    let mut patterns = Vec::with_capacity(rest.len());
+                    let mut used_vars = vec![constructor];
+                    for sexpr in rest {
+                        let (pattern, pattern_used_vars) = compile_pattern(sexpr, env, vars)?;
+                        patterns.push(pattern);
+                        used_vars = merge(&used_vars, &pattern_used_vars);
+                    }
+                    result_with_vars(
+                        PatternExpr::Constructed {
+                            constructor,
+                            arguments: patterns,
+                        },
+                        used_vars,
+                    )
+                }
+                _ => Err(Located::new(
+                    sexpr.source_range.clone(),
+                    ParseError::InvalidSyntax,
+                )),
             }
-            result_with_vars(
-                PatternExpr::Constructed {
-                    constructor,
-                    arguments: patterns,
-                },
-                used_vars,
-            )
         }
         _ => {
             let (expr, used_vars) = compile_sexpr(sexpr, env)?;
@@ -372,7 +356,10 @@ fn compile_pattern<'a>(
                 Expr::BooleanConstant(b) => Ok(PatternExpr::BooleanConstant(b)),
                 Expr::Unit => Ok(PatternExpr::Unit),
                 Expr::Bound(i) => Ok(PatternExpr::Bound(i)),
-                _ => Err(ParseError::InvalidExpressionInPattern),
+                _ => Err(Located::new(
+                    sexpr.source_range.clone(),
+                    ParseError::InvalidExpressionInPattern,
+                )),
             }?;
             result_with_vars(pattern, used_vars)
         }
@@ -380,10 +367,10 @@ fn compile_pattern<'a>(
 }
 
 fn compile_case<'a>(
-    pattern_sexpr: &'a Sexpr,
-    body_sexpr: &'a Sexpr,
+    pattern_sexpr: &'a Located<Sexpr<Token>>,
+    body_sexpr: &'a Located<Sexpr<Token>>,
     env: &mut VecDeque<&'a str>,
-) -> ParseResult<(PatternExpr, Box<Expr>, Vec<usize>)> {
+) -> Result<(PatternExpr, Box<Expr>, Vec<usize>), Located<ParseError>> {
     let mut defined_vars = Vec::new();
     let (pattern, pattern_used_vars) = compile_pattern(pattern_sexpr, env, &mut defined_vars)?;
     let var_count = defined_vars.len();
@@ -405,11 +392,15 @@ fn compile_case<'a>(
 }
 
 fn compile_cases<'a>(
-    sexprs: &'a [Sexpr],
+    source_range: &Range<usize>,
+    sexprs: &'a [Located<Sexpr<Token>>],
     env: &mut VecDeque<&'a str>,
-) -> ParseResult<(Vec<(PatternExpr, Box<Expr>)>, Vec<usize>)> {
+) -> Result<(Vec<(PatternExpr, Box<Expr>)>, Vec<usize>), Located<ParseError>> {
     if sexprs.len() % 2 != 0 {
-        return Err(ParseError::InvalidSyntax);
+        return Err(Located::new(
+            source_range.clone(),
+            ParseError::InvalidSyntax,
+        ));
     }
     let mut used_vars = vec![];
     let mut cases = Vec::with_capacity(sexprs.len() / 2);
@@ -423,65 +414,57 @@ fn compile_cases<'a>(
 }
 
 fn compile_data_constructor<'a>(
-    sexpr: &'a Sexpr,
+    sexpr: &'a Located<Sexpr<Token>>,
     env: &mut VecDeque<&'a str>,
-) -> ParseResult<usize> {
-    match sexpr {
-        Sexpr {
-            comment: _,
-            operator: Some('$'),
-            contents: SexprBody::Atom(s),
-        } => {
-            env.push_front(s);
+) -> Result<usize, Located<ParseError>> {
+    match &sexpr.value {
+        Sexpr::Atom(Token::IdentifierBinding(s)) => {
+            env.push_front(s.as_deref().unwrap_or(""));
             Ok(0)
         }
-        Sexpr {
-            comment: _,
-            operator: None,
-            contents: SexprBody::List(vec),
-        } => {
-            if vec.len() < 2 {
-                return Err(ParseError::InvalidSyntax);
+        Sexpr::List(list) => {
+            if list.len() < 2 {
+                return Err(Located::new(
+                    sexpr.source_range.clone(),
+                    ParseError::InvalidSyntax,
+                ));
             }
-            if let Sexpr {
-                contents: SexprBody::Atom(s),
-                operator: Some('$'),
-                comment: _,
-            } = &vec[0]
-            {
-                env.push_front(s);
+            if let Sexpr::Atom(Token::IdentifierBinding(s)) = &list[0].value {
+                env.push_front(s.as_deref().unwrap_or(""));
             } else {
-                return Err(ParseError::InvalidSyntax);
+                return Err(Located::new(
+                    list[0].source_range.clone(),
+                    ParseError::InvalidSyntax,
+                ));
             }
-            for v in &vec[1..vec.len()] {
-                if let Sexpr {
-                    comment: _,
-                    operator: None,
-                    contents: SexprBody::Atom(s),
-                } = v
-                {
-                    if s != "_" {
-                        return Err(ParseError::InvalidFieldDeclaration);
-                    }
+            for v in &list[1..list.len()] {
+                if let Sexpr::Atom(Token::IdentifierBinding(None)) = v.value {
                 } else {
-                    return Err(ParseError::InvalidFieldDeclaration);
+                    return Err(Located::new(
+                        v.source_range.clone(),
+                        ParseError::InvalidFieldDeclaration,
+                    ));
                 }
             }
-            Ok(vec.len() - 1)
+            Ok(list.len() - 1)
         }
-        _ => Err(ParseError::InvalidSyntax),
+        _ => Err(Located::new(
+            sexpr.source_range.clone(),
+            ParseError::UnexpectedToken,
+        )),
     }
 }
 
 fn compile_form<'a>(
-    head: &str,
-    rest: &'a [Sexpr],
+    source_range: &Range<usize>,
+    head: Located<&Token>,
+    rest: &'a [Located<Sexpr<Token>>],
     env: &mut VecDeque<&'a str>,
-) -> ExprResult<Expr> {
-    match head {
-        "fn" => {
+) -> Result<(Box<Expr>, Vec<usize>), Located<ParseError>> {
+    match &head.value {
+        Token::Keyword(Keyword::Function) => {
             if rest.len() < 1 {
-                return Err(ParseError::InvalidSyntax);
+                return Err(head.with_value(ParseError::InvalidSyntax));
             }
             let (body, args) = rest.split_last().unwrap();
             let vars = read_function_vars(args)?;
@@ -503,19 +486,20 @@ fn compile_form<'a>(
                 parent_used_vars,
             )
         }
-        "let" => {
+        Token::Keyword(Keyword::Let) => {
             if rest.len() != 3 {
-                return Err(ParseError::InvalidSyntax);
+                return Err(Located::new(
+                    source_range.clone(),
+                    ParseError::InvalidSyntax,
+                ));
             }
-            match &rest[0] {
-                Sexpr {
-                    contents: SexprBody::Atom(s),
-                    operator: Some('$'),
-                    comment: _,
-                } => {
-                    env.push_front(s);
+            match &rest[0].value {
+                Sexpr::Atom(Token::IdentifierBinding(s)) => {
+                    let name = s.as_deref().unwrap_or("");
+                    env.push_front(name);
                     let (value_expression, value_used_vars) = compile_sexpr(&rest[1], env)?;
-                    check_recursion_guarded(s, &value_expression, 0)?;
+                    check_recursion_guarded(&value_expression, 0)
+                        .map_err(|e| Located::new(rest[0].source_range.clone(), e))?;
                     let (body_expression, body_used_vars) = compile_sexpr(&rest[2], env)?;
                     env.pop_front();
                     let parent_used_vars =
@@ -529,12 +513,18 @@ fn compile_form<'a>(
                         parent_used_vars,
                     )
                 }
-                _ => Err(ParseError::InvalidVariableBinding),
+                _ => Err(Located::new(
+                    rest[0].source_range.clone(),
+                    ParseError::InvalidVariableBinding,
+                )),
             }
         }
-        "if" => {
+        Token::Keyword(Keyword::If) => {
             if rest.len() != 3 {
-                return Err(ParseError::InvalidSyntax);
+                return Err(Located::new(
+                    source_range.clone(),
+                    ParseError::InvalidSyntax,
+                ));
             }
             let (condition, condition_used_vars) = compile_sexpr(&rest[0], env)?;
             let (true_branch, true_used_vars) = compile_sexpr(&rest[1], env)?;
@@ -551,21 +541,27 @@ fn compile_form<'a>(
                 ),
             )
         }
-        "match" => {
+        Token::Keyword(Keyword::Match) => {
             if rest.len() < 1 {
-                return Err(ParseError::InvalidSyntax);
+                return Err(Located::new(
+                    source_range.clone(),
+                    ParseError::InvalidSyntax,
+                ));
             }
             let (value_sexpr, cases_sexprs) = rest.split_first().unwrap();
             let (value, value_used_vars) = compile_sexpr(value_sexpr, env)?;
-            let (cases, cases_used_vars) = compile_cases(cases_sexprs, env)?;
+            let (cases, cases_used_vars) = compile_cases(source_range, cases_sexprs, env)?;
             result_with_vars(
                 Expr::Match { value, cases },
                 merge(&value_used_vars, &cases_used_vars),
             )
         }
-        "data" => {
+        Token::Keyword(Keyword::Data) => {
             if rest.len() < 2 {
-                return Err(ParseError::InvalidSyntax);
+                return Err(Located::new(
+                    source_range.clone(),
+                    ParseError::InvalidSyntax,
+                ));
             }
             let mut var_counts = Vec::new();
             for sexpr in &rest[..rest.len() - 1] {
@@ -584,15 +580,19 @@ fn compile_form<'a>(
                 parent_used_vars(body_used_vars, constructor_count),
             )
         }
-        v => apply(compile_atom(v, None, env)?, rest, env),
+        v => apply(
+            compile_atom(v, env).map_err(|e| Located::new(head.source_range, e))?,
+            rest,
+            env,
+        ),
     }
 }
 
 fn apply<'a>(
     function: (Box<Expr>, Vec<usize>),
-    rest: &'a [Sexpr],
+    rest: &'a [Located<Sexpr<Token>>],
     env: &mut VecDeque<&'a str>,
-) -> ExprResult<Expr> {
+) -> Result<(Box<Expr>, Vec<usize>), Located<ParseError>> {
     let (function_expr, mut used_vars) = function;
     let mut arguments = Vec::new();
     for sexpr in rest {
@@ -609,48 +609,33 @@ fn apply<'a>(
     )
 }
 
-fn compile_sexpr<'a>(sexpr: &'a Sexpr, env: &mut VecDeque<&'a str>) -> ExprResult<Expr> {
-    match &sexpr {
-        Sexpr {
-            contents: SexprBody::Atom(s),
-            operator,
-            comment: _,
-        } => compile_atom(s, operator.as_ref(), env),
-        Sexpr {
-            contents: SexprBody::List(list),
-            operator: None,
-            comment: _,
-        } => match list.split_first() {
+fn compile_sexpr<'a>(
+    sexpr: &'a Located<Sexpr<Token>>,
+    env: &mut VecDeque<&'a str>,
+) -> Result<(Box<Expr>, Vec<usize>), Located<ParseError>> {
+    match &sexpr.value {
+        Sexpr::Atom(token) => {
+            compile_atom(token, env).map_err(|e| Located::new(sexpr.source_range.clone(), e))
+        }
+        Sexpr::List(list) => match list.split_first() {
             None => result(Expr::Unit),
-            Some((head, rest)) => match head {
-                Sexpr {
-                    contents: SexprBody::Atom(head),
-                    operator: None,
-                    comment: _,
-                } => compile_form(head, rest, env),
-                Sexpr {
-                    contents: SexprBody::List(_),
-                    operator: None,
-                    comment: _,
-                } => apply(compile_sexpr(head, env)?, rest, env),
-                _ => Err(ParseError::UnexpectedOperator(head.operator.unwrap())),
+            Some((head, rest)) => match &head.value {
+                Sexpr::Atom(Token::Keyword(Keyword::Tuple)) => {
+                    let mut result = Vec::new();
+                    let mut used_vars = Vec::new();
+                    for sexpr in rest {
+                        let (expr, new_used_vars) = compile_sexpr(sexpr, env)?;
+                        result.push(expr);
+                        used_vars = merge(&used_vars, &new_used_vars);
+                    }
+                    result_with_vars(Expr::Vec(result), used_vars)
+                }
+                Sexpr::Atom(token) => {
+                    compile_form(&sexpr.source_range, head.with_value(token), rest, env)
+                }
+                Sexpr::List(_) => apply(compile_sexpr(head, env)?, rest, env),
             },
         },
-        Sexpr {
-            contents: SexprBody::List(list),
-            operator: Some('#'),
-            comment: _,
-        } => {
-            let mut result = Vec::new();
-            let mut used_vars = Vec::new();
-            for sexpr in list {
-                let (expr, new_used_vars) = compile_sexpr(sexpr, env)?;
-                result.push(expr);
-                used_vars = merge(&used_vars, &new_used_vars);
-            }
-            result_with_vars(Expr::Vec(result), used_vars)
-        }
-        _ => Err(ParseError::UnexpectedOperator(sexpr.operator.unwrap())),
     }
 }
 
@@ -784,10 +769,51 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
     })
 }
 
-pub fn compile(sexpr: &Sexpr) -> ParseResult<Expr> {
-    let (expr, used_vars) = compile_sexpr(sexpr, &mut VecDeque::new())?;
-    if !used_vars.is_empty() {
-        panic!("Vars referenced that don't exist, should be impossible");
+fn strip_comments(sexpr: Located<Sexpr<Token>>) -> Option<Located<Sexpr<Token>>> {
+    match sexpr.value {
+        Sexpr::Atom(Token::Comment) => None,
+        Sexpr::Atom(_) => Some(sexpr),
+        Sexpr::List(list) => Some(Located::new(
+            sexpr.source_range,
+            Sexpr::List(list.into_iter().flat_map(|e| strip_comments(e)).collect()),
+        )),
     }
-    Ok(*rewrite_env_maps(*expr, &[]))
+}
+
+pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
+    let sexpr = parse(
+        s,
+        |s, quoted| {
+            Token::try_from(if quoted {
+                unescape_string(s).unwrap()
+            } else {
+                s.to_string()
+            })
+            .map_err(|e| ParseError::InvalidToken(e))
+        },
+        ParseError::UnexpectedCharacter,
+    )?;
+    let sexpr_no_comments = strip_comments(sexpr).unwrap();
+    match sexpr_no_comments.value {
+        Sexpr::Atom(_) => panic!("Expected list"),
+        Sexpr::List(list) => {
+            if list.is_empty() {
+                return Err(Located::new(
+                    sexpr_no_comments.source_range.clone(),
+                    ParseError::EmptyInput,
+                ));
+            }
+            if list.len() > 1 {
+                return Err(Located::new(
+                    list[1].source_range.clone(),
+                    ParseError::UnexpectedToken,
+                ));
+            }
+            let (expr, used_vars) = compile_sexpr(&list[0], &mut VecDeque::new())?;
+            if !used_vars.is_empty() {
+                panic!("Vars referenced that don't exist, should be impossible");
+            }
+            Ok(*rewrite_env_maps(*expr, &[]))
+        }
+    }
 }

@@ -280,9 +280,9 @@ pub fn run(expr: &Expr) -> RunResult {
 
 #[cfg(test)]
 mod test {
-    use crate::sexpr::sexpr_file;
+    use crate::program::compile;
+    use crate::run;
     use crate::value::{RuntimeError, Value};
-    use crate::{compile, run};
 
     // We pass a callback since the Expr doesn't live past this function and isn't owned by the
     // Value
@@ -290,23 +290,23 @@ mod test {
     where
         F: Fn(&Value),
     {
-        f(&*run(&compile(&sexpr_file(s).unwrap().1).unwrap()).unwrap())
+        f(&*run(&compile(s).unwrap()).unwrap())
     }
 
     fn eval_error(s: &str) -> RuntimeError {
-        run(&compile(&sexpr_file(s).unwrap().1).unwrap()).unwrap_err()
+        run(&compile(s).unwrap()).unwrap_err()
     }
 
     #[test]
     fn variable_binding() {
-        eval(&"let $x 1 (let $y 2 x)", |val| {
+        eval(&"; let $x 1 (let $y 2 x)", |val| {
             assert_eq!(val, &Value::Number(1.0))
         })
     }
 
     #[test]
     fn function_definition() {
-        eval(&"let $f (fn $x; add x x); f 1", |val| {
+        eval(&"; let $f (fn $x; add x x); f 1", |val| {
             assert_eq!(val, &Value::Number(2.0))
         })
     }
@@ -314,14 +314,14 @@ mod test {
     #[test]
     fn applied_non_function() {
         assert_eq!(
-            eval_error(&"let $x 1; x 1"),
+            eval_error(&"; let $x 1; x 1"),
             RuntimeError::AppliedNonFunction
         );
     }
 
     #[test]
     fn if_statement() {
-        eval(&"if (eq 0 1) 1; if (eq 0 0) 2 3", |val| {
+        eval(&"; if (eq 0 1) 1; if (eq 0 0) 2 3", |val| {
             assert_eq!(val, &Value::Number(2.0))
         })
     }
@@ -329,7 +329,7 @@ mod test {
     #[test]
     fn match_type_error() {
         assert_eq!(
-            eval_error(&"match #(1 \"[a string]) #(1 $s) s #(2 0) 0"),
+            eval_error(&"; match (# 1 [\"a string]) (# 1 $s) s (# 2 0) 0"),
             RuntimeError::TypeError
         );
     }
@@ -337,7 +337,7 @@ mod test {
     #[test]
     fn recursion() {
         eval(
-            &"let $fac (fn $n; if (eq n 0) 1; mul n; fac; sub n 1); fac 7",
+            &"; let $fac (fn $n; if (eq n 0) 1; mul n; fac; sub n 1); fac 7",
             |val| assert_eq!(val, &Value::Number(5040.0)),
         )
     }
@@ -345,7 +345,7 @@ mod test {
     #[test]
     fn closure() {
         eval(
-            &"let $create_closure (fn $x; fn $y; add x y); let $f (create_closure 2); f 3",
+            &"; let $create_closure (fn $x; fn $y; add x y); let $f (create_closure 2); f 3",
             |val| assert_eq!(val, &Value::Number(5.0)),
         )
     }
@@ -353,7 +353,7 @@ mod test {
     #[test]
     fn match_constructor() {
         eval(
-            &"data ($a _ _) ($b _ _); let $x (a 1 2); match x (a $y $z) z (b $_ $_) 3",
+            &"; data ($a _ _) ($b _ _); let $x (a 1 2); match x (a $y $z) z (b _ _) 3",
             |val| assert_eq!(val, &Value::Number(2.0)),
         )
     }
@@ -361,7 +361,7 @@ mod test {
     #[test]
     fn match_different_type_constructor() {
         assert_eq!(
-            eval_error(&"data ($a _); let $x (a 1); data ($b _); match x (a $x) x (b $x) x"),
+            eval_error(&"; data ($a _); let $x (a 1); data ($b _); match x (a $x) x (b $x) x"),
             RuntimeError::TypeError
         );
     }
@@ -370,7 +370,7 @@ mod test {
     fn recursive_construction_and_match() {
         eval(
             &"
-            data ($cons _ _) $nil
+          ; data ($cons _ _) $nil
           ; let $list (
               fn $vec
             ; let $build (
@@ -386,7 +386,7 @@ mod test {
                 (cons $x $xs) (add x; sum xs)
                 nil 0
             )
-          ; sum (list #(1 2 3 4 5))
+          ; sum (list (# 1 2 3 4 5))
         ",
             |val| assert_eq!(val, &Value::Number(15.0)),
         )
@@ -395,7 +395,7 @@ mod test {
     #[test]
     fn comparison_type_error() {
         assert_eq!(
-            eval_error(&"data ($a _ _); if (eq (a 1 2) (a 2 \"[string])) true false",),
+            eval_error(&"; data ($a _ _); if (eq (a 1 2) (a 2 [\"string])) true false"),
             RuntimeError::TypeError
         );
     }
@@ -403,7 +403,7 @@ mod test {
     #[test]
     fn constructor_incorrect_argument_count() {
         assert_eq!(
-            eval_error(&"data ($a _ _); a 0"),
+            eval_error(&"; data ($a _ _); a 0"),
             RuntimeError::InvalidNumberOfArguments {
                 expected: 2,
                 received: 1
@@ -414,7 +414,7 @@ mod test {
     #[test]
     fn no_patterns_matched() {
         assert_eq!(
-            eval_error(&"data ($a _) ($b _); let $x (a 1); match x (b $x) x"),
+            eval_error(&"; data ($a _) ($b _); let $x (a 1); match x (b $x) x"),
             RuntimeError::NoPatternsMatched
         );
     }
@@ -422,7 +422,7 @@ mod test {
     #[test]
     fn multiple_patterns_matched() {
         assert_eq!(
-            eval_error(&"data ($a _) ($b _); let $x (a 1); match x $x x (a $x) x"),
+            eval_error(&"; data ($a _) ($b _); let $x (a 1); match x $x x (a $x) x"),
             RuntimeError::MultiplePatternsMatched
         );
     }
@@ -430,7 +430,7 @@ mod test {
     #[test]
     fn invalid_match_pattern() {
         assert_eq!(
-            eval_error(&"data ($a _ _); match (a 1 1) (a $x) x"),
+            eval_error(&"; data ($a _ _); match (a 1 1) (a $x) x"),
             RuntimeError::InvalidConstructorPattern
         );
     }

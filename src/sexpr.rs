@@ -1,166 +1,267 @@
-use nom::branch::alt;
-use nom::bytes::complete::{take_while, take_while1};
-use nom::character::complete::{char as nom_char, multispace0, none_of, one_of};
-use nom::combinator::{all_consuming, opt};
-use nom::error::ParseError;
-use nom::multi::many0;
-use nom::sequence::{delimited, preceded, terminated};
-use nom::IResult;
+use crate::located::Located;
+use std::iter::once;
+use std::ops::Range;
+
+fn is_atom_char(b: u8) -> bool {
+    if (b & 127) == 1 {
+        // Non-ASCII bytes are allowed, and start with a 1 bit
+        return true;
+    }
+    let c: char = b as char;
+    !(c.is_whitespace() || "()[];".chars().any(|c1| c == c1))
+}
+
+struct StackEntry<T> {
+    start: usize,
+    list: Vec<Located<Sexpr<T>>>,
+    // True if the list is created by a semicolon. In this case, when we get to a closing
+    // parenthesis, the parent list ends as well.
+    end_parent: bool,
+}
 
 #[derive(Debug, PartialEq)]
-pub struct Sexpr {
-    pub comment: Option<String>,
-    pub operator: Option<char>,
-    pub contents: SexprBody,
+pub enum Sexpr<T> {
+    Atom(T),
+    List(Vec<Located<Sexpr<T>>>),
 }
 
-#[derive(Debug, PartialEq)]
-pub enum SexprBody {
-    Atom(String),
-    List(Vec<Sexpr>),
-}
-
-fn whitespace_terminated<'a, F: 'a, O, E: ParseError<&'a str>>(
-    inner: F,
-) -> impl FnMut(&'a str) -> IResult<&'a str, O, E>
+fn handle_escaped_string<'a, F>(s: &'a str, mut handle_part: F) -> Result<(), usize>
 where
-    F: Fn(&'a str) -> IResult<&'a str, O, E>,
+    F: FnMut(&'a str),
 {
-    terminated(inner, multispace0)
+    let mut start = 0;
+    let mut escaped = false;
+    for (i, b) in s.bytes().enumerate() {
+        if b == (']' as u8) {
+            if escaped {
+                handle_part(&s[i..(i + 1)]);
+                escaped = false;
+            } else {
+                panic!("Unexpected end of string character");
+            }
+        } else if b == ('\\' as u8) {
+            if escaped {
+                handle_part(&s[i..(i + 1)]);
+                escaped = false;
+            } else {
+                handle_part(&s[start..i]);
+                start = i + 2;
+                escaped = true;
+            }
+        } else if escaped {
+            return Err(i - 1);
+        }
+    }
+    if escaped {
+        return Err(s.len() - 1);
+    }
+    handle_part(&s[start..s.len()]);
+    Ok(())
 }
 
-fn escaped_char(i: &str) -> IResult<&str, char> {
-    preceded(nom_char('\\'), alt((nom_char('\\'), nom_char(']'))))(i)
+fn validate_escaped_string(s: &str) -> Result<(), usize> {
+    handle_escaped_string(s, |_| {})
 }
 
-fn quoted(i: &str) -> IResult<&str, String> {
-    let (rest, result) = delimited(
-        nom_char('['),
-        many0(alt((escaped_char, none_of("]")))),
-        whitespace_terminated(nom_char(']')),
-    )(i)?;
-    let string: String = result.into_iter().collect();
-    Ok((rest, string))
+pub fn unescape_string(s: &str) -> Result<String, usize> {
+    let mut parts: Vec<&str> = Vec::new();
+    handle_escaped_string(s, |part| parts.push(part))?;
+    Ok(parts.concat())
 }
 
-fn unquoted(i: &str) -> IResult<&str, String> {
-    let (rest, s) = whitespace_terminated(take_while1(|c: char| {
-        c.is_alphanumeric() || c == '_' || c == '-'
-    }))(i)?;
-    Ok((rest, s.to_string()))
+fn char_range(i: usize) -> Range<usize> {
+    i..(i + 1)
 }
 
-fn atom(i: &str) -> IResult<&str, SexprBody> {
-    let (rest, s) = alt((quoted, unquoted))(i)?;
-    Ok((rest, SexprBody::Atom(s)))
-}
-
-fn delimited_sexpr(i: &str) -> IResult<&str, SexprBody> {
-    alt((
-        delimited(
-            whitespace_terminated(nom_char('(')),
-            sexpr,
-            whitespace_terminated(nom_char(')')),
-        ),
-        atom,
-    ))(i)
-}
-
-// TODO: allow nested comments and escaping }
-fn comment(i: &str) -> IResult<&str, String> {
-    let (rest, s) = delimited(
-        nom_char('{'),
-        take_while(|c| c != '}'),
-        whitespace_terminated(nom_char('}')),
-    )(i)?;
-    Ok((rest, s.to_string()))
-}
-
-fn operator(i: &str) -> IResult<&str, char> {
-    whitespace_terminated(one_of("$#\""))(i)
-}
-
-fn prefixed_sexpr<F>(inner: F) -> impl FnMut(&str) -> IResult<&str, Sexpr>
+pub fn parse<T, F, E>(
+    s: &str,
+    get_token: F,
+    unexpected_character: E,
+) -> Result<Located<Sexpr<T>>, Located<E>>
 where
-    F: Fn(&str) -> IResult<&str, SexprBody>,
+    F: Fn(&str, bool) -> Result<T, E>,
 {
-    move |i: &str| {
-        let (rest, comment) = opt(comment)(i)?;
-        let (rest, operator) = opt(operator)(rest)?;
-        let (rest, contents) = inner(rest)?;
-        Ok((
-            rest,
-            Sexpr {
-                comment,
-                operator,
-                contents,
-            },
-        ))
+    let mut stack: Vec<StackEntry<T>> = vec![StackEntry {
+        start: 0,
+        list: Vec::new(),
+        end_parent: false,
+    }];
+    let mut current_atom: Option<(usize, bool)> = None;
+    for (i, b) in s.bytes().enumerate().chain(once((s.len(), ')' as u8))) {
+        if is_atom_char(b) {
+            match current_atom {
+                None => current_atom = Some((i, false)),
+                Some(_) => {}
+            }
+            continue;
+        } else {
+            // Non-atom chars are always ASCII
+            let c: char = b as char;
+            let ended_quote = match current_atom {
+                None => false,
+                Some((start, quoted)) => {
+                    if quoted {
+                        if c != ']' {
+                            continue;
+                        }
+                        let mut j = i;
+                        let bytes = s.as_bytes();
+                        while j > start + 1 && bytes[j - 1] == ('\\' as u8) {
+                            j -= 1;
+                        }
+                        let escape_characters = i - j;
+                        if escape_characters % 2 == 1 {
+                            continue;
+                        }
+                        let escaped_string = &s[(start + 1)..i];
+                        match validate_escaped_string(escaped_string) {
+                            Ok(_) => {}
+                            Err(j) => {
+                                return Err(Located::new(
+                                    (start + 1 + j)..(start + 1 + j + 1),
+                                    unexpected_character,
+                                ))
+                            }
+                        }
+                        current_atom = None;
+                        match get_token(escaped_string, true) {
+                            Ok(token) => stack
+                                .last_mut()
+                                .unwrap()
+                                .list
+                                .push(Located::new(start..(i + 1), Sexpr::Atom(token))),
+                            Err(e) => return Err(Located::new(start..(i + 1), e)),
+                        }
+                        true
+                    } else {
+                        let atom = &s[start..i];
+                        current_atom = None;
+                        match get_token(atom, false) {
+                            Ok(token) => stack
+                                .last_mut()
+                                .unwrap()
+                                .list
+                                .push(Located::new(start..i, Sexpr::Atom(token))),
+                            Err(e) => return Err(Located::new(start..i, e)),
+                        }
+                        false
+                    }
+                }
+            };
+            if c.is_whitespace() {
+                continue;
+            }
+            match c {
+                '[' => current_atom = Some((i, true)),
+                ']' => {
+                    if !ended_quote {
+                        return Err(Located::new(char_range(i), unexpected_character));
+                    }
+                }
+                '(' => {
+                    stack.push(StackEntry {
+                        start: i,
+                        list: Vec::new(),
+                        end_parent: false,
+                    });
+                }
+                ')' => loop {
+                    let StackEntry {
+                        list,
+                        start,
+                        end_parent,
+                    } = match stack.pop() {
+                        None => return Err(Located::new(char_range(i), unexpected_character)),
+                        Some(l) => l,
+                    };
+                    match stack.last_mut() {
+                        None => {
+                            if i != s.len() {
+                                return Err(Located::new(char_range(i), unexpected_character));
+                            }
+                            // This is the end of the program, return
+                            return match list.first() {
+                                None => Ok(Located::new(0..0, Sexpr::List(list))),
+                                Some(first) => Ok(Located::new(
+                                    first.source_range.start..list.last().unwrap().source_range.end,
+                                    Sexpr::List(list),
+                                )),
+                            };
+                        }
+                        Some(StackEntry {
+                            start: _,
+                            list: parent_list,
+                            end_parent: _,
+                        }) => parent_list.push(Located::new(
+                            start..(if end_parent { i } else { i + 1 }),
+                            Sexpr::List(list),
+                        )),
+                    }
+                    if !end_parent {
+                        break;
+                    }
+                },
+                ';' => {
+                    stack.push(StackEntry {
+                        start: i,
+                        list: Vec::new(),
+                        end_parent: true,
+                    });
+                }
+                _ => unreachable!(),
+            }
+        }
     }
-}
-
-fn sexpr(i: &str) -> IResult<&str, SexprBody> {
-    let (rest, mut sexprs) = many0(prefixed_sexpr(delimited_sexpr))(i)?;
-    let (rest, tail) = opt(prefixed_sexpr(list_tail))(rest)?;
-    if let Some(last) = tail {
-        sexprs.push(last);
-    }
-    Ok((rest, SexprBody::List(sexprs)))
-}
-
-fn list_tail(i: &str) -> IResult<&str, SexprBody> {
-    preceded(whitespace_terminated(nom_char(';')), sexpr)(i)
-}
-
-pub fn sexpr_file(i: &str) -> IResult<&str, Sexpr> {
-    let (rest, body) = all_consuming(preceded(multispace0, sexpr))(i)?;
-    Ok((
-        rest,
-        Sexpr {
-            comment: None,
-            operator: None,
-            contents: body,
-        },
-    ))
+    Err(Located::new(s.len() - 1..s.len(), unexpected_character))
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+    use std::ops::Range;
 
-    fn new_atom(s: &str) -> Sexpr {
-        Sexpr {
-            comment: None,
-            operator: None,
-            contents: SexprBody::Atom(s.to_string()),
-        }
+    fn new_atom(s: &str, range: Range<usize>) -> Located<Sexpr<String>> {
+        Located::new(range, Sexpr::Atom(s.to_string()))
     }
 
-    fn new_list(exprs: Vec<Sexpr>) -> Sexpr {
-        Sexpr {
-            comment: None,
-            operator: None,
-            contents: SexprBody::List(exprs),
+    fn new_list(exprs: Vec<Located<Sexpr<String>>>, range: Range<usize>) -> Located<Sexpr<String>> {
+        Located::new(range, Sexpr::List(exprs))
+    }
+
+    fn parse_string(s: &str, escaped: bool) -> Result<String, ()> {
+        match escaped {
+            true => unescape_string(s),
+            false => Ok(s.to_string()),
         }
+        .map_err(|_| ())
+    }
+
+    fn parse_simple(s: &str) -> Result<Located<Sexpr<String>>, Located<()>> {
+        parse(s, parse_string, ())
     }
 
     #[test]
     fn atom() {
         assert_eq!(
-            sexpr_file("x").unwrap(),
-            ("", new_list(vec![new_atom("x")]))
+            parse_simple("x").unwrap(),
+            new_list(vec![new_atom("x", 0..1)], 0..1)
         );
     }
 
     #[test]
     fn list() {
         assert_eq!(
-            sexpr_file("(x y z)").unwrap(),
-            (
-                "",
-                new_list(vec![new_list(
-                    vec!["x", "y", "z"].into_iter().map(new_atom).collect()
-                )])
+            parse_simple("(x y z)").unwrap(),
+            new_list(
+                vec![new_list(
+                    vec![
+                        new_atom("x", 1..2),
+                        new_atom("y", 3..4),
+                        new_atom("z", 5..6)
+                    ],
+                    0..7
+                )],
+                0..7
             )
         );
     }
@@ -168,92 +269,44 @@ mod test {
     #[test]
     fn leading_whitespace() {
         assert_eq!(
-            sexpr_file(" \n x").unwrap(),
-            ("", new_list(vec![new_atom("x")]))
-        )
+            parse_simple(" \n x").unwrap(),
+            new_list(vec![new_atom("x", 3..4)], 3..4)
+        );
     }
 
     #[test]
     fn trailing_whitespace() {
         assert_eq!(
-            sexpr_file("x \n ").unwrap(),
-            ("", new_list(vec![new_atom("x")]))
-        )
-    }
-
-    #[test]
-    fn operators() {
-        assert_eq!(
-            sexpr_file("let $x (fn $y #(y y)) x").unwrap(),
-            (
-                "",
-                new_list(vec![
-                    new_atom("let"),
-                    Sexpr {
-                        comment: None,
-                        operator: Some('$'),
-                        contents: SexprBody::Atom("x".to_string())
-                    },
-                    new_list(vec![
-                        new_atom("fn"),
-                        Sexpr {
-                            comment: None,
-                            operator: Some('$'),
-                            contents: SexprBody::Atom("y".to_string())
-                        },
-                        Sexpr {
-                            comment: None,
-                            operator: Some('#'),
-                            contents: SexprBody::List(vec![new_atom("y"), new_atom("y")])
-                        }
-                    ]),
-                    new_atom("x")
-                ])
-            )
-        )
-    }
-
-    #[test]
-    fn comments() {
-        assert_eq!(
-            sexpr_file("{a comment} a ({another comment} b c)").unwrap(),
-            (
-                "",
-                new_list(vec![
-                    Sexpr {
-                        comment: Some("a comment".to_string()),
-                        operator: None,
-                        contents: SexprBody::Atom("a".to_string()),
-                    },
-                    new_list(vec![
-                        Sexpr {
-                            comment: Some("another comment".to_string()),
-                            operator: None,
-                            contents: SexprBody::Atom("b".to_string())
-                        },
-                        new_atom("c")
-                    ])
-                ])
-            )
-        )
+            parse_simple("x \n ").unwrap(),
+            new_list(vec![new_atom("x", 0..1)], 0..1)
+        );
     }
 
     #[test]
     fn semicolon() {
         assert_eq!(
-            sexpr_file("a; b; (c; d)").unwrap(),
-            (
-                "",
-                new_list(vec![
-                    new_atom("a"),
-                    new_list(vec![
-                        new_atom("b"),
-                        new_list(vec![new_list(vec![
-                            new_atom("c"),
-                            new_list(vec![new_atom("d")])
-                        ])])
-                    ])
-                ])
+            parse_simple("a; b; (c; d)").unwrap(),
+            new_list(
+                vec![
+                    new_atom("a", 0..1),
+                    new_list(
+                        vec![
+                            new_atom("b", 3..4),
+                            new_list(
+                                vec![new_list(
+                                    vec![
+                                        new_atom("c", 7..8),
+                                        new_list(vec![new_atom("d", 10..11)], 8..11)
+                                    ],
+                                    6..12
+                                )],
+                                4..12
+                            )
+                        ],
+                        1..12
+                    )
+                ],
+                0..12
             )
         )
     }
@@ -261,8 +314,8 @@ mod test {
     #[test]
     fn quotation() {
         assert_eq!(
-            sexpr_file("[abc \\\\ \\] def]").unwrap(),
-            ("", new_list(vec![new_atom("abc \\ ] def")]))
-        )
+            parse_simple("[abc \\\\ \\] def]").unwrap(),
+            new_list(vec![new_atom("abc \\ ] def", 0..15)], 0..15)
+        );
     }
 }
