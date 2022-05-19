@@ -21,6 +21,9 @@ pub enum Builtin {
     Eq,
     NumberToString,
     Leq,
+    And,
+    Or,
+    Not,
 }
 
 // TODO: maybe swap this around, return a word for each Builtin?
@@ -41,6 +44,9 @@ pub fn get_builtin(s: &str) -> Option<Builtin> {
         "eq" => Some(Builtin::Eq),
         "number_to_string" => Some(Builtin::NumberToString),
         "leq" => Some(Builtin::Leq),
+        "and" => Some(Builtin::And),
+        "or" => Some(Builtin::Or),
+        "not" => Some(Builtin::Not),
         _ => None,
     }
 }
@@ -62,6 +68,9 @@ pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) ->
         Builtin::Eq => invoke_binary(eq, argument_values),
         Builtin::NumberToString => invoke_unary(number_to_string, argument_values),
         Builtin::Leq => invoke_binary(leq, argument_values),
+        Builtin::And => invoke_binary(and, argument_values),
+        Builtin::Or => invoke_binary(or, argument_values),
+        Builtin::Not => invoke_unary(not, argument_values),
     }
 }
 
@@ -105,6 +114,14 @@ impl<'a> ArgType<'a> for f64 {
     }
 }
 
+impl<'a> ArgType<'a> for bool {
+    fn from_value<'b>(value: &'b Value<'a>) -> Result<&'b Self, RuntimeError> {
+        match &*value {
+            Value::Boolean(b) => Ok(b),
+            _ => Err(RuntimeError::TypeError),
+        }
+    }
+}
 trait ResultType<'a> {
     fn to_result(self) -> RunResult<'a>;
 }
@@ -296,4 +313,16 @@ fn number_to_string<'a>(x: &f64) -> String {
 
 fn leq<'a>(x: &f64, y: &f64) -> bool {
     *x <= *y
+}
+
+fn and(x: &bool, y: &bool) -> bool {
+    *x && *y
+}
+
+fn or(x: &bool, y: &bool) -> bool {
+    *x || *y
+}
+
+fn not(x: &bool) -> bool {
+    !*x
 }
