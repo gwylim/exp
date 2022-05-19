@@ -298,6 +298,11 @@ mod test {
     }
 
     #[test]
+    fn constant() {
+        eval(&"123", |val| assert_eq!(val, &Value::Number(123.0)))
+    }
+
+    #[test]
     fn variable_binding() {
         eval(&"; let $x 1 (let $y 2 x)", |val| {
             assert_eq!(val, &Value::Number(1.0))
