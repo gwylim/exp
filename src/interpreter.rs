@@ -1,7 +1,7 @@
 use crate::builtin::invoke_builtin;
 use crate::eq::eq;
 use crate::program::{Expr, PatternExpr};
-use crate::value::{RunResult, RuntimeError, Value};
+use crate::value::{RunResult, RuntimeError, Value, VecType};
 use std::cell::RefCell;
 use std::collections::vec_deque::VecDeque;
 use std::iter::zip;
@@ -73,14 +73,18 @@ fn match_pattern<'a>(
             matches.push(value.clone());
             Ok(true)
         }
-        PatternExpr::Vec(pattern_vec) => {
-            if let Value::Vec(vec) = &**value {
-                if pattern_vec.len() != vec.len() {
+        PatternExpr::Tuple(pattern_vec) => {
+            if let Value::Vec {
+                values,
+                vec_type: VecType::Tuple,
+            } = &**value
+            {
+                if pattern_vec.len() != values.len() {
                     return Err(RuntimeError::TypeError);
                 }
                 let mut matched = true;
                 // We loop over all elements to catch any type errors
-                for (x, y) in zip(pattern_vec, vec) {
+                for (x, y) in zip(pattern_vec, values) {
                     if !match_pattern(x, y, stack, matches)? {
                         matched = false;
                     }
@@ -146,7 +150,7 @@ fn match_pattern<'a>(
                 PatternExpr::Unit => eq(&Value::Unit, &*value),
                 PatternExpr::Bound(i) => eq(&stack[*i], &*value),
                 PatternExpr::BindVar => unreachable!(),
-                PatternExpr::Vec(_) => unreachable!(),
+                PatternExpr::Tuple(_) => unreachable!(),
                 PatternExpr::Constructed { .. } => unreachable!(),
             }?;
             Ok(matched)
@@ -195,12 +199,15 @@ fn run_inner<'a>(
             stack.pop_front();
             result
         }
-        Expr::Vec(vec) => {
+        Expr::Vec { values, vec_type } => {
             let mut result = Vec::new();
-            for e in vec {
+            for e in values {
                 result.push(run_inner(unique_id, e, stack)?);
             }
-            Ok(Rc::new(Value::Vec(result)))
+            Ok(Rc::new(Value::Vec {
+                values: result,
+                vec_type: *vec_type,
+            }))
         }
         Expr::If {
             condition,
@@ -391,7 +398,7 @@ mod test {
                 (cons $x $xs) (add x; sum xs)
                 nil 0
             )
-          ; sum (list (# 1 2 3 4 5))
+          ; sum (list (@ 1 2 3 4 5))
         ",
             |val| assert_eq!(val, &Value::Number(15.0)),
         )

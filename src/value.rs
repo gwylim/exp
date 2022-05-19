@@ -7,6 +7,12 @@ use std::fmt;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VecType {
+    Array,
+    Tuple,
+}
+
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
     Number(f64),
@@ -14,7 +20,10 @@ pub enum Value<'a> {
     Boolean(bool),
     Unit,
     Builtin(Builtin),
-    Vec(Vec<Rc<Value<'a>>>),
+    Vec {
+        values: Vec<Rc<Value<'a>>>,
+        vec_type: VecType,
+    },
     Closure {
         arity: usize,
         body: &'a Expr,
@@ -52,8 +61,18 @@ impl<'a> Display for Value<'a> {
             Value::Boolean(b) => b.fmt(f),
             Value::Unit => write!(f, "()"),
             Value::Builtin(_b) => write!(f, "<builtin function>"),
-            Value::Vec(vec) => {
-                write!(f, "#(")?;
+            Value::Vec {
+                values: vec,
+                vec_type,
+            } => {
+                write!(
+                    f,
+                    "({} ",
+                    match vec_type {
+                        VecType::Array => "@",
+                        VecType::Tuple => "#",
+                    }
+                )?;
                 for i in 0..vec.len() {
                     vec[i].fmt(f)?;
                     if i < vec.len() - 1 {

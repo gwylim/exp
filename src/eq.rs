@@ -1,4 +1,4 @@
-use crate::value::{RuntimeError, Value};
+use crate::value::{RuntimeError, Value, VecType};
 use std::iter::zip;
 
 pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
@@ -24,13 +24,23 @@ pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
                 Err(RuntimeError::TypeError)
             }
         }
-        Value::Vec(vec) => {
-            if let Value::Vec(vec1) = y {
-                if vec.len() != vec1.len() {
+        Value::Vec { values, vec_type } => {
+            if let Value::Vec {
+                values: values1,
+                vec_type: vec_type1,
+            } = y
+            {
+                if vec_type != vec_type1 {
                     return Err(RuntimeError::TypeError);
                 }
+                if values.len() != values1.len() {
+                    return match vec_type {
+                        VecType::Array => Ok(false),
+                        VecType::Tuple => Err(RuntimeError::TypeError),
+                    };
+                }
                 let mut matched = true;
-                for (x, y) in zip(vec, vec1) {
+                for (x, y) in zip(values, values1) {
                     if !eq(x, y)? {
                         matched = false;
                     }

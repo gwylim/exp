@@ -20,6 +20,7 @@ pub enum Keyword {
     If,
     Function,
     Tuple,
+    Array,
 }
 
 #[derive(Debug)]
@@ -60,6 +61,7 @@ impl TryFrom<String> for Token {
                     "data" => Ok(Token::Keyword(Keyword::Data)),
                     "fn" => Ok(Token::Keyword(Keyword::Function)),
                     "#" => Ok(Token::Keyword(Keyword::Tuple)),
+                    "@" => Ok(Token::Keyword(Keyword::Array)),
                     "_" => Ok(Token::IdentifierBinding(None)),
                     "true" => Ok(Token::BooleanLiteral(true)),
                     "false" => Ok(Token::BooleanLiteral(false)),

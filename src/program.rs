@@ -2,6 +2,7 @@ use crate::builtin::{get_builtin, Builtin};
 use crate::located::Located;
 use crate::sexpr::{unescape_string, Sexpr};
 use crate::token::{Keyword, Token};
+use crate::value::VecType;
 use crate::{parse, InvalidTokenError};
 use std::collections::vec_deque::VecDeque;
 use std::convert::TryFrom;
@@ -37,7 +38,7 @@ fn result_with_vars<Expr, E>(
 #[derive(Debug)]
 pub enum PatternExpr {
     BindVar,
-    Vec(Vec<Box<PatternExpr>>),
+    Tuple(Vec<Box<PatternExpr>>),
     Constructed {
         constructor: usize,
         arguments: Vec<Box<PatternExpr>>,
@@ -73,7 +74,10 @@ pub enum Expr {
         value: Box<Expr>,
         body: Box<Expr>,
     },
-    Vec(Vec<Box<Expr>>),
+    Vec {
+        values: Vec<Box<Expr>>,
+        vec_type: VecType,
+    },
     If {
         condition: Box<Expr>,
         true_branch: Box<Expr>,
@@ -162,7 +166,7 @@ fn read_function_vars(list: &[Located<Sexpr<Token>>]) -> Result<Vec<&str>, Locat
 fn var_count(pattern: &PatternExpr) -> usize {
     match pattern {
         PatternExpr::BindVar => 1,
-        PatternExpr::Vec(v) => v.iter().map(|e| var_count(e)).sum(),
+        PatternExpr::Tuple(v) => v.iter().map(|e| var_count(e)).sum(),
         PatternExpr::NumericConstant(_) => 0,
         PatternExpr::StringConstant(_) => 0,
         PatternExpr::BooleanConstant(_) => 0,
@@ -204,8 +208,11 @@ fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
             check_no_recursion(value, level + 1)?;
             check_no_recursion(body, level + 1)?;
         }
-        Expr::Vec(vec) => {
-            for e in vec {
+        Expr::Vec {
+            values,
+            vec_type: _,
+        } => {
+            for e in values {
                 check_no_recursion(e, level)?;
             }
         }
@@ -257,8 +264,11 @@ fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> 
             check_no_recursion(value, level + 1)?;
             check_recursion_guarded(body, level + 1)?;
         }
-        Expr::Vec(vec) => {
-            for expr in vec {
+        Expr::Vec {
+            values,
+            vec_type: _,
+        } => {
+            for expr in values {
                 check_no_recursion(expr, level)?;
             }
         }
@@ -317,7 +327,7 @@ fn compile_pattern<'a>(
                         patterns.push(pattern);
                         used_vars = merge(&used_vars, &pattern_used_vars);
                     }
-                    result_with_vars(PatternExpr::Vec(patterns), used_vars)
+                    result_with_vars(PatternExpr::Tuple(patterns), used_vars)
                 }
                 Sexpr::Atom(Token::Identifier(s)) => {
                     let constructor = match lookup(s, env) {
@@ -462,6 +472,26 @@ fn compile_form<'a>(
     env: &mut VecDeque<&'a str>,
 ) -> Result<(Box<Expr>, Vec<usize>), Located<ParseError>> {
     match &head.value {
+        Token::Keyword(Keyword::Tuple) | Token::Keyword(Keyword::Array) => {
+            let mut values = Vec::new();
+            let mut used_vars = Vec::new();
+            for sexpr in rest {
+                let (expr, new_used_vars) = compile_sexpr(sexpr, env)?;
+                values.push(expr);
+                used_vars = merge(&used_vars, &new_used_vars);
+            }
+            result_with_vars(
+                Expr::Vec {
+                    values,
+                    vec_type: match &head.value {
+                        Token::Keyword(Keyword::Tuple) => VecType::Tuple,
+                        Token::Keyword(Keyword::Array) => VecType::Array,
+                        _ => unreachable!(),
+                    },
+                },
+                used_vars,
+            )
+        }
         Token::Keyword(Keyword::Function) => {
             if rest.len() < 1 {
                 return Err(head.with_value(ParseError::InvalidSyntax));
@@ -620,16 +650,6 @@ fn compile_sexpr<'a>(
         Sexpr::List(list) => match list.split_first() {
             None => result(Expr::Unit),
             Some((head, rest)) => match &head.value {
-                Sexpr::Atom(Token::Keyword(Keyword::Tuple)) => {
-                    let mut result = Vec::new();
-                    let mut used_vars = Vec::new();
-                    for sexpr in rest {
-                        let (expr, new_used_vars) = compile_sexpr(sexpr, env)?;
-                        result.push(expr);
-                        used_vars = merge(&used_vars, &new_used_vars);
-                    }
-                    result_with_vars(Expr::Vec(result), used_vars)
-                }
                 Sexpr::Atom(token) => {
                     compile_form(&sexpr.source_range, head.with_value(token), rest, env)
                 }
@@ -644,7 +664,7 @@ fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize])
         PatternExpr::Bound(i) => {
             PatternExpr::Bound(current_env_map.iter().position(|j| i == *j).unwrap())
         }
-        PatternExpr::Vec(vec) => PatternExpr::Vec(
+        PatternExpr::Tuple(vec) => PatternExpr::Tuple(
             vec.into_iter()
                 .map(|e| Box::new(rewrite_env_map_pattern(*e, current_env_map)))
                 .collect(),
@@ -722,11 +742,13 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
                 body: rewrite_env_maps(*body, &child_env_map),
             }
         }
-        Expr::Vec(vec) => Expr::Vec(
-            vec.into_iter()
+        Expr::Vec { values, vec_type } => Expr::Vec {
+            values: values
+                .into_iter()
                 .map(|e| rewrite_env_maps(*e, current_env_map))
                 .collect(),
-        ),
+            vec_type,
+        },
         Expr::If {
             condition,
             true_branch,

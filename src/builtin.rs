@@ -1,5 +1,5 @@
 use crate::eq::eq;
-use crate::value::{RunResult, RuntimeError, Value};
+use crate::value::{RunResult, RuntimeError, Value, VecType};
 use std::collections::vec_deque::VecDeque;
 use std::io;
 use std::rc::Rc;
@@ -10,13 +10,14 @@ pub enum Builtin {
     GetLine,
     Length,
     Get,
+    Concat,
     Add,
     Sub,
     Mul,
     Div,
     StringLength,
     Substring,
-    Concat,
+    ConcatString,
     Eq,
     NumberToString,
     Leq,
@@ -29,13 +30,14 @@ pub fn get_builtin(s: &str) -> Option<Builtin> {
         "get_line" => Some(Builtin::GetLine),
         "length" => Some(Builtin::Length),
         "get" => Some(Builtin::Get),
+        "concat" => Some(Builtin::Concat),
         "add" => Some(Builtin::Add),
         "sub" => Some(Builtin::Sub),
         "mul" => Some(Builtin::Mul),
         "div" => Some(Builtin::Div),
         "string_length" => Some(Builtin::StringLength),
         "substring" => Some(Builtin::Substring),
-        "concat" => Some(Builtin::Concat),
+        "concat_string" => Some(Builtin::ConcatString),
         "eq" => Some(Builtin::Eq),
         "number_to_string" => Some(Builtin::NumberToString),
         "leq" => Some(Builtin::Leq),
@@ -48,12 +50,13 @@ pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) ->
         Builtin::Print => invoke_unary(print, argument_values),
         Builtin::Length => invoke_unary(len, argument_values),
         Builtin::Get => invoke_binary(get, argument_values),
+        Builtin::Concat => invoke_binary(concat, argument_values),
         Builtin::Add => invoke_binary(add, argument_values),
         Builtin::Sub => invoke_binary(sub, argument_values),
         Builtin::Mul => invoke_binary(mul, argument_values),
         Builtin::Div => invoke_binary(div, argument_values),
         Builtin::Substring => invoke_ternary(substring, argument_values),
-        Builtin::Concat => invoke_binary(concat, argument_values),
+        Builtin::ConcatString => invoke_binary(concat_string, argument_values),
         Builtin::GetLine => invoke_nullary(get_line, argument_values),
         Builtin::StringLength => invoke_unary(string_length, argument_values),
         Builtin::Eq => invoke_binary(eq, argument_values),
@@ -75,7 +78,10 @@ impl<'a> ArgType<'a> for Value<'a> {
 impl<'a> ArgType<'a> for Vec<Rc<Value<'a>>> {
     fn from_value<'b>(value: &'b Value<'a>) -> Result<&'b Self, RuntimeError> {
         match value {
-            Value::Vec(v) => Ok(v),
+            Value::Vec {
+                values,
+                vec_type: VecType::Array,
+            } => Ok(values),
             _ => Err(RuntimeError::TypeError),
         }
     }
@@ -241,6 +247,15 @@ fn get<'a>(vec: &Vec<Rc<Value<'a>>>, i: &f64) -> Rc<Value<'a>> {
     vec[index as usize].clone()
 }
 
+fn concat<'a>(a: &Vec<Rc<Value<'a>>>, b: &Vec<Rc<Value<'a>>>) -> Rc<Value<'a>> {
+    let mut values = a.clone();
+    values.extend(b.iter().map(|rc| rc.clone()));
+    Rc::new(Value::Vec {
+        values,
+        vec_type: VecType::Array,
+    })
+}
+
 fn add(x: &f64, y: &f64) -> f64 {
     *x + *y
 }
@@ -261,7 +276,7 @@ fn substring<'a>(s: &String, start: &f64, end: &f64) -> String {
     s[(get_int(*start) as usize)..(get_int(*end) as usize)].to_string()
 }
 
-fn concat<'a>(s1: &String, s2: &String) -> String {
+fn concat_string<'a>(s1: &String, s2: &String) -> String {
     s1.to_string() + s2
 }
 
