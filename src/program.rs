@@ -24,24 +24,17 @@ pub enum ParseError {
     EmptyInput,
 }
 
-fn result<Expr, E>(expr: Expr) -> Result<(Box<Expr>, Vec<usize>), E> {
-    Ok((Box::new(expr), Vec::new()))
-}
-
-fn result_with_vars<Expr, E>(
-    expr: Expr,
-    used_vars: Vec<usize>,
-) -> Result<(Box<Expr>, Vec<usize>), E> {
-    Ok((Box::new(expr), used_vars))
+fn result<Expr, E>(expr: Expr) -> Result<(Expr, Vec<usize>), E> {
+    Ok((expr, Vec::new()))
 }
 
 #[derive(Debug)]
 pub enum PatternExpr {
     BindVar,
-    Tuple(Vec<Box<PatternExpr>>),
+    Tuple(Vec<PatternExpr>),
     Constructed {
         constructor: usize,
-        arguments: Vec<Box<PatternExpr>>,
+        arguments: Vec<PatternExpr>,
     },
     // TODO: maybe can avoid duplicating this with Expr
     NumericConstant(f64),
@@ -49,6 +42,13 @@ pub enum PatternExpr {
     BooleanConstant(bool),
     Unit,
     Bound(usize),
+}
+
+#[derive(Debug)]
+pub enum Declaration {
+    Let(Expr),
+    // A type declaration is a list of constructors, each characterized by an arity
+    Type(Vec<usize>),
 }
 
 // TODO: need source position information
@@ -67,15 +67,15 @@ pub enum Expr {
     Bound(usize),
     Apply {
         function: Box<Expr>,
-        arguments: Vec<Box<Expr>>,
+        arguments: Vec<Expr>,
     },
     Builtin(Builtin),
-    Let {
-        value: Box<Expr>,
+    Declarations {
+        decls: Vec<Declaration>,
         body: Box<Expr>,
     },
     Vec {
-        values: Vec<Box<Expr>>,
+        values: Vec<Expr>,
         vec_type: VecType,
     },
     If {
@@ -85,12 +85,7 @@ pub enum Expr {
     },
     Match {
         value: Box<Expr>,
-        cases: Vec<(PatternExpr, Box<Expr>)>,
-    },
-    // A type declaration is a list of constructors, each characterized by an arity
-    TypeDeclaration {
-        constructors: Vec<usize>,
-        body: Box<Expr>,
+        cases: Vec<(PatternExpr, Expr)>,
     },
 }
 
@@ -98,7 +93,7 @@ fn lookup(var: &str, env: &VecDeque<&str>) -> Option<usize> {
     env.iter().position(|s| var.eq(*s))
 }
 
-fn compile_atom(atom: &Token, env: &VecDeque<&str>) -> Result<(Box<Expr>, Vec<usize>), ParseError> {
+fn compile_atom(atom: &Token, env: &VecDeque<&str>) -> Result<(Expr, Vec<usize>), ParseError> {
     match atom {
         Token::StringLiteral(s) => result(Expr::StringConstant(s.to_string())),
         Token::NumericLiteral(x) => result(Expr::NumericConstant(*x)),
@@ -107,7 +102,7 @@ fn compile_atom(atom: &Token, env: &VecDeque<&str>) -> Result<(Box<Expr>, Vec<us
             None => get_builtin(s)
                 .map(|b| result(Expr::Builtin(b)))
                 .unwrap_or(Err(ParseError::UndefinedVariable)),
-            Some(i) => result_with_vars(Expr::Bound(i), vec![i]),
+            Some(i) => Ok((Expr::Bound(i), vec![i])),
         },
         _ => Err(ParseError::InvalidSyntax),
     }
@@ -179,6 +174,25 @@ fn var_count(pattern: &PatternExpr) -> usize {
     }
 }
 
+fn check_no_recursion_in_decls(
+    decls: &Vec<Declaration>,
+    level: usize,
+) -> Result<usize, ParseError> {
+    let mut var_count = 0;
+    for decl in decls {
+        match decl {
+            Declaration::Let(value) => {
+                var_count += 1;
+                check_no_recursion(value, level + var_count)?;
+            }
+            Declaration::Type(constructors) => {
+                var_count += constructors.len();
+            }
+        }
+    }
+    Ok(var_count)
+}
+
 fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
     match expr {
         Expr::Function {
@@ -204,9 +218,9 @@ fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
                 check_no_recursion(arg, level)?;
             }
         }
-        Expr::Let { value, body } => {
-            check_no_recursion(value, level + 1)?;
-            check_no_recursion(body, level + 1)?;
+        Expr::Declarations { decls, body } => {
+            let var_count = check_no_recursion_in_decls(decls, level)?;
+            check_no_recursion(body, level + var_count)?;
         }
         Expr::Vec {
             values,
@@ -236,9 +250,6 @@ fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
         Expr::BooleanConstant(_) => {}
         Expr::Unit => {}
         Expr::Builtin(_) => {}
-        Expr::TypeDeclaration { constructors, body } => {
-            check_no_recursion(body, level + constructors.len())?;
-        }
     }
     Ok(())
 }
@@ -260,9 +271,9 @@ fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> 
                 check_no_recursion(argument, level)?;
             }
         }
-        Expr::Let { value, body } => {
-            check_no_recursion(value, level + 1)?;
-            check_recursion_guarded(body, level + 1)?;
+        Expr::Declarations { decls, body } => {
+            let var_count = check_no_recursion_in_decls(decls, level)?;
+            check_recursion_guarded(body, level + var_count)?;
         }
         Expr::Vec {
             values,
@@ -293,9 +304,6 @@ fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> 
         Expr::Unit => {}
         Expr::Function { .. } => {}
         Expr::Builtin(_) => {}
-        Expr::TypeDeclaration { constructors, body } => {
-            check_recursion_guarded(body, level + constructors.len())?;
-        }
     }
     Ok(())
 }
@@ -304,7 +312,7 @@ fn compile_pattern<'a>(
     sexpr: &'a Located<Sexpr<Token>>,
     env: &mut VecDeque<&'a str>,
     vars: &mut Vec<&'a str>,
-) -> Result<(Box<PatternExpr>, Vec<usize>), Located<ParseError>> {
+) -> Result<(PatternExpr, Vec<usize>), Located<ParseError>> {
     match &sexpr.value {
         Sexpr::Atom(Token::IdentifierBinding(s)) => {
             vars.push(s.as_deref().unwrap_or(""));
@@ -327,7 +335,7 @@ fn compile_pattern<'a>(
                         patterns.push(pattern);
                         used_vars = merge(&used_vars, &pattern_used_vars);
                     }
-                    result_with_vars(PatternExpr::Tuple(patterns), used_vars)
+                    Ok((PatternExpr::Tuple(patterns), used_vars))
                 }
                 Sexpr::Atom(Token::Identifier(s)) => {
                     let constructor = match lookup(s, env) {
@@ -344,13 +352,13 @@ fn compile_pattern<'a>(
                         patterns.push(pattern);
                         used_vars = merge(&used_vars, &pattern_used_vars);
                     }
-                    result_with_vars(
+                    Ok((
                         PatternExpr::Constructed {
                             constructor,
                             arguments: patterns,
                         },
                         used_vars,
-                    )
+                    ))
                 }
                 _ => Err(Located::new(
                     sexpr.source_range.clone(),
@@ -360,7 +368,7 @@ fn compile_pattern<'a>(
         }
         _ => {
             let (expr, used_vars) = compile_sexpr(sexpr, env)?;
-            let pattern = match *expr {
+            let pattern = match expr {
                 Expr::NumericConstant(n) => Ok(PatternExpr::NumericConstant(n)),
                 Expr::StringConstant(s) => Ok(PatternExpr::StringConstant(s)),
                 Expr::BooleanConstant(b) => Ok(PatternExpr::BooleanConstant(b)),
@@ -371,7 +379,7 @@ fn compile_pattern<'a>(
                     ParseError::InvalidExpressionInPattern,
                 )),
             }?;
-            result_with_vars(pattern, used_vars)
+            Ok((pattern, used_vars))
         }
     }
 }
@@ -380,7 +388,7 @@ fn compile_case<'a>(
     pattern_sexpr: &'a Located<Sexpr<Token>>,
     body_sexpr: &'a Located<Sexpr<Token>>,
     env: &mut VecDeque<&'a str>,
-) -> Result<(PatternExpr, Box<Expr>, Vec<usize>), Located<ParseError>> {
+) -> Result<(PatternExpr, Expr, Vec<usize>), Located<ParseError>> {
     let mut defined_vars = Vec::new();
     let (pattern, pattern_used_vars) = compile_pattern(pattern_sexpr, env, &mut defined_vars)?;
     let var_count = defined_vars.len();
@@ -392,7 +400,7 @@ fn compile_case<'a>(
         env.pop_front();
     }
     Ok((
-        *pattern,
+        pattern,
         body,
         merge(
             &pattern_used_vars,
@@ -405,7 +413,7 @@ fn compile_cases<'a>(
     source_range: &Range<usize>,
     sexprs: &'a [Located<Sexpr<Token>>],
     env: &mut VecDeque<&'a str>,
-) -> Result<(Vec<(PatternExpr, Box<Expr>)>, Vec<usize>), Located<ParseError>> {
+) -> Result<(Vec<(PatternExpr, Expr)>, Vec<usize>), Located<ParseError>> {
     if sexprs.len() % 2 != 0 {
         return Err(Located::new(
             source_range.clone(),
@@ -465,164 +473,11 @@ fn compile_data_constructor<'a>(
     }
 }
 
-fn compile_form<'a>(
-    source_range: &Range<usize>,
-    head: Located<&Token>,
-    rest: &'a [Located<Sexpr<Token>>],
-    env: &mut VecDeque<&'a str>,
-) -> Result<(Box<Expr>, Vec<usize>), Located<ParseError>> {
-    match &head.value {
-        Token::Keyword(Keyword::Tuple) | Token::Keyword(Keyword::Array) => {
-            let mut values = Vec::new();
-            let mut used_vars = Vec::new();
-            for sexpr in rest {
-                let (expr, new_used_vars) = compile_sexpr(sexpr, env)?;
-                values.push(expr);
-                used_vars = merge(&used_vars, &new_used_vars);
-            }
-            result_with_vars(
-                Expr::Vec {
-                    values,
-                    vec_type: match &head.value {
-                        Token::Keyword(Keyword::Tuple) => VecType::Tuple,
-                        Token::Keyword(Keyword::Array) => VecType::Array,
-                        _ => unreachable!(),
-                    },
-                },
-                used_vars,
-            )
-        }
-        Token::Keyword(Keyword::Function) => {
-            if rest.len() < 1 {
-                return Err(head.with_value(ParseError::InvalidSyntax));
-            }
-            let (body, args) = rest.split_last().unwrap();
-            let vars = read_function_vars(args)?;
-            for v in vars.iter().rev() {
-                env.push_front(v);
-            }
-            let (expr, used_vars) = compile_sexpr(body, env)?;
-            // Change de Bruijn indices for parent environment
-            let parent_used_vars = parent_used_vars(used_vars, vars.len());
-            for _ in &vars {
-                env.pop_front();
-            }
-            result_with_vars(
-                Expr::Function {
-                    arity: vars.len(),
-                    body: expr,
-                    env_map: parent_used_vars.clone(),
-                },
-                parent_used_vars,
-            )
-        }
-        Token::Keyword(Keyword::Let) => {
-            if rest.len() != 3 {
-                return Err(Located::new(
-                    source_range.clone(),
-                    ParseError::InvalidSyntax,
-                ));
-            }
-            match &rest[0].value {
-                Sexpr::Atom(Token::IdentifierBinding(s)) => {
-                    let name = s.as_deref().unwrap_or("");
-                    env.push_front(name);
-                    let (value_expression, value_used_vars) = compile_sexpr(&rest[1], env)?;
-                    check_recursion_guarded(&value_expression, 0)
-                        .map_err(|e| Located::new(rest[0].source_range.clone(), e))?;
-                    let (body_expression, body_used_vars) = compile_sexpr(&rest[2], env)?;
-                    env.pop_front();
-                    let parent_used_vars =
-                        parent_used_vars(merge(&body_used_vars, &value_used_vars), 1);
-
-                    result_with_vars(
-                        Expr::Let {
-                            value: value_expression,
-                            body: body_expression,
-                        },
-                        parent_used_vars,
-                    )
-                }
-                _ => Err(Located::new(
-                    rest[0].source_range.clone(),
-                    ParseError::InvalidVariableBinding,
-                )),
-            }
-        }
-        Token::Keyword(Keyword::If) => {
-            if rest.len() != 3 {
-                return Err(Located::new(
-                    source_range.clone(),
-                    ParseError::InvalidSyntax,
-                ));
-            }
-            let (condition, condition_used_vars) = compile_sexpr(&rest[0], env)?;
-            let (true_branch, true_used_vars) = compile_sexpr(&rest[1], env)?;
-            let (false_branch, false_used_vars) = compile_sexpr(&rest[2], env)?;
-            result_with_vars(
-                Expr::If {
-                    condition,
-                    true_branch,
-                    false_branch,
-                },
-                merge(
-                    &condition_used_vars,
-                    &merge(&true_used_vars, &false_used_vars),
-                ),
-            )
-        }
-        Token::Keyword(Keyword::Match) => {
-            if rest.len() < 1 {
-                return Err(Located::new(
-                    source_range.clone(),
-                    ParseError::InvalidSyntax,
-                ));
-            }
-            let (value_sexpr, cases_sexprs) = rest.split_first().unwrap();
-            let (value, value_used_vars) = compile_sexpr(value_sexpr, env)?;
-            let (cases, cases_used_vars) = compile_cases(source_range, cases_sexprs, env)?;
-            result_with_vars(
-                Expr::Match { value, cases },
-                merge(&value_used_vars, &cases_used_vars),
-            )
-        }
-        Token::Keyword(Keyword::Data) => {
-            if rest.len() < 2 {
-                return Err(Located::new(
-                    source_range.clone(),
-                    ParseError::InvalidSyntax,
-                ));
-            }
-            let mut var_counts = Vec::new();
-            for sexpr in &rest[..rest.len() - 1] {
-                var_counts.push(compile_data_constructor(sexpr, env)?);
-            }
-            let constructor_count = var_counts.len();
-            let (body, body_used_vars) = compile_sexpr(&rest.last().unwrap(), env)?;
-            for _ in 0..constructor_count {
-                env.pop_front();
-            }
-            result_with_vars(
-                Expr::TypeDeclaration {
-                    constructors: var_counts,
-                    body,
-                },
-                parent_used_vars(body_used_vars, constructor_count),
-            )
-        }
-        v => apply(
-            compile_atom(v, env).map_err(|e| Located::new(head.source_range, e))?,
-            rest,
-            env,
-        ),
-    }
-}
-
 fn apply<'a>(
-    function: (Box<Expr>, Vec<usize>),
+    function: (Expr, Vec<usize>),
     rest: &'a [Located<Sexpr<Token>>],
     env: &mut VecDeque<&'a str>,
-) -> Result<(Box<Expr>, Vec<usize>), Located<ParseError>> {
+) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
     let (function_expr, mut used_vars) = function;
     let mut arguments = Vec::new();
     for sexpr in rest {
@@ -630,33 +485,216 @@ fn apply<'a>(
         used_vars = merge(&used_vars, &arg_used_vars);
         arguments.push(arg_expr);
     }
-    result_with_vars(
+    Ok((
         Expr::Apply {
-            function: function_expr,
+            function: Box::new(function_expr),
             arguments,
         },
         used_vars,
-    )
+    ))
 }
 
 fn compile_sexpr<'a>(
-    sexpr: &'a Located<Sexpr<Token>>,
+    mut sexpr: &'a Located<Sexpr<Token>>,
     env: &mut VecDeque<&'a str>,
-) -> Result<(Box<Expr>, Vec<usize>), Located<ParseError>> {
-    match &sexpr.value {
-        Sexpr::Atom(token) => {
-            compile_atom(token, env).map_err(|e| Located::new(sexpr.source_range.clone(), e))
-        }
-        Sexpr::List(list) => match list.split_first() {
-            None => result(Expr::Unit),
-            Some((head, rest)) => match &head.value {
-                Sexpr::Atom(token) => {
-                    compile_form(&sexpr.source_range, head.with_value(token), rest, env)
-                }
-                Sexpr::List(_) => apply(compile_sexpr(head, env)?, rest, env),
+) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
+    let mut decls = Vec::new();
+    let mut var_count = 0;
+    // Variables used from the parent environment (i.e. from the initial value of env)
+    let mut used_vars = Vec::new();
+    let body = loop {
+        match &sexpr.value {
+            Sexpr::Atom(token) => {
+                let (expr, expr_used_vars) = compile_atom(token, env)
+                    .map_err(|e| Located::new(sexpr.source_range.clone(), e))?;
+                used_vars = merge(&used_vars, &parent_used_vars(expr_used_vars, var_count));
+                break expr;
+            }
+            Sexpr::List(list) => match list.split_first() {
+                None => break Expr::Unit,
+                Some((head, rest)) => match &head.value {
+                    Sexpr::Atom(token) => {
+                        match token {
+                            Token::Keyword(Keyword::Tuple) | Token::Keyword(Keyword::Array) => {
+                                let mut values = Vec::new();
+                                for sexpr in rest {
+                                    let (expr, new_used_vars) = compile_sexpr(sexpr, env)?;
+                                    values.push(expr);
+                                    used_vars = merge(
+                                        &used_vars,
+                                        &parent_used_vars(new_used_vars, var_count),
+                                    );
+                                }
+                                break Expr::Vec {
+                                    values,
+                                    vec_type: match token {
+                                        Token::Keyword(Keyword::Tuple) => VecType::Tuple,
+                                        Token::Keyword(Keyword::Array) => VecType::Array,
+                                        _ => unreachable!(),
+                                    },
+                                };
+                            }
+                            Token::Keyword(Keyword::Function) => {
+                                if rest.len() < 1 {
+                                    return Err(head.with_value(ParseError::InvalidSyntax));
+                                }
+                                let (body, args) = rest.split_last().unwrap();
+                                let vars = read_function_vars(args)?;
+                                for v in vars.iter().rev() {
+                                    env.push_front(v);
+                                }
+                                var_count += vars.len();
+                                let (expr, expr_used_vars) = compile_sexpr(body, env)?;
+                                // Change de Bruijn indices for parent environment
+                                let parent_used_vars = parent_used_vars(expr_used_vars, var_count);
+                                used_vars = merge(&used_vars, &parent_used_vars);
+                                for _ in &vars {
+                                    env.pop_front();
+                                }
+                                var_count -= vars.len();
+                                break Expr::Function {
+                                    arity: vars.len(),
+                                    body: Box::new(expr),
+                                    env_map: parent_used_vars,
+                                };
+                            }
+                            Token::Keyword(Keyword::Let) => {
+                                if rest.len() != 3 {
+                                    return Err(Located::new(
+                                        sexpr.source_range.clone(),
+                                        ParseError::InvalidSyntax,
+                                    ));
+                                }
+                                match &rest[0].value {
+                                    Sexpr::Atom(Token::IdentifierBinding(s)) => {
+                                        let name = s.as_deref().unwrap_or("");
+                                        env.push_front(name);
+                                        var_count += 1;
+                                        let (value_expression, value_used_vars) =
+                                            compile_sexpr(&rest[1], env)?;
+                                        check_recursion_guarded(&value_expression, 0).map_err(
+                                            |e| Located::new(rest[0].source_range.clone(), e),
+                                        )?;
+                                        sexpr = &rest[2];
+                                        used_vars = merge(
+                                            &used_vars,
+                                            &parent_used_vars(value_used_vars, var_count),
+                                        );
+
+                                        // FIXME: maybe we shouldn't return Box<Expr> from compile_*
+                                        // functions?
+                                        decls.push(Declaration::Let(value_expression));
+                                    }
+                                    _ => {
+                                        return Err(Located::new(
+                                            rest[0].source_range.clone(),
+                                            ParseError::InvalidVariableBinding,
+                                        ))
+                                    }
+                                }
+                            }
+                            Token::Keyword(Keyword::If) => {
+                                if rest.len() != 3 {
+                                    return Err(Located::new(
+                                        sexpr.source_range.clone(),
+                                        ParseError::InvalidSyntax,
+                                    ));
+                                }
+                                let (condition, condition_used_vars) =
+                                    compile_sexpr(&rest[0], env)?;
+                                let (true_branch, true_used_vars) = compile_sexpr(&rest[1], env)?;
+                                let (false_branch, false_used_vars) = compile_sexpr(&rest[2], env)?;
+                                used_vars = merge(
+                                    &used_vars,
+                                    &parent_used_vars(
+                                        merge(
+                                            &condition_used_vars,
+                                            &merge(&true_used_vars, &false_used_vars),
+                                        ),
+                                        var_count,
+                                    ),
+                                );
+                                break Expr::If {
+                                    condition: Box::new(condition),
+                                    true_branch: Box::new(true_branch),
+                                    false_branch: Box::new(false_branch),
+                                };
+                            }
+                            Token::Keyword(Keyword::Match) => {
+                                if rest.len() < 1 {
+                                    return Err(Located::new(
+                                        sexpr.source_range.clone(),
+                                        ParseError::InvalidSyntax,
+                                    ));
+                                }
+                                let (value_sexpr, cases_sexprs) = rest.split_first().unwrap();
+                                let (value, value_used_vars) = compile_sexpr(value_sexpr, env)?;
+                                let (cases, cases_used_vars) =
+                                    compile_cases(&sexpr.source_range, cases_sexprs, env)?;
+                                used_vars = merge(
+                                    &used_vars,
+                                    &parent_used_vars(
+                                        merge(&value_used_vars, &cases_used_vars),
+                                        var_count,
+                                    ),
+                                );
+                                break Expr::Match {
+                                    value: Box::new(value),
+                                    cases,
+                                };
+                            }
+                            Token::Keyword(Keyword::Data) => {
+                                if rest.len() < 2 {
+                                    return Err(Located::new(
+                                        sexpr.source_range.clone(),
+                                        ParseError::InvalidSyntax,
+                                    ));
+                                }
+                                let mut constructor_var_counts = Vec::new();
+                                for sexpr in &rest[..rest.len() - 1] {
+                                    constructor_var_counts
+                                        .push(compile_data_constructor(sexpr, env)?);
+                                }
+                                let constructor_count = constructor_var_counts.len();
+                                var_count += constructor_count;
+                                sexpr = &rest.last().unwrap();
+                                decls.push(Declaration::Type(constructor_var_counts));
+                            }
+                            v => {
+                                let (expr, expr_used_vars) = apply(
+                                    compile_atom(v, env)
+                                        .map_err(|e| Located::new(head.source_range.clone(), e))?,
+                                    rest,
+                                    env,
+                                )?;
+                                used_vars =
+                                    merge(&used_vars, &parent_used_vars(expr_used_vars, var_count));
+                                break expr;
+                            }
+                        }
+                    }
+                    Sexpr::List(_) => {
+                        let (expr, expr_used_vars) = apply(compile_sexpr(head, env)?, rest, env)?;
+                        used_vars = merge(&used_vars, &expr_used_vars);
+                        break expr;
+                    }
+                },
             },
-        },
+        }
+    };
+    for _ in 0..var_count {
+        env.pop_front();
     }
+    if decls.is_empty() {
+        return Ok((body, used_vars));
+    }
+    Ok((
+        Expr::Declarations {
+            decls,
+            body: Box::new(body),
+        },
+        used_vars,
+    ))
 }
 
 fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize]) -> PatternExpr {
@@ -666,7 +704,7 @@ fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize])
         }
         PatternExpr::Tuple(vec) => PatternExpr::Tuple(
             vec.into_iter()
-                .map(|e| Box::new(rewrite_env_map_pattern(*e, current_env_map)))
+                .map(|e| rewrite_env_map_pattern(e, current_env_map))
                 .collect(),
         ),
         PatternExpr::BindVar => pattern_expr,
@@ -684,7 +722,7 @@ fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize])
                 .unwrap(),
             arguments: arguments
                 .into_iter()
-                .map(|e| Box::new(rewrite_env_map_pattern(*e, current_env_map)))
+                .map(|e| rewrite_env_map_pattern(e, current_env_map))
                 .collect(),
         },
     }
@@ -697,8 +735,8 @@ fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize])
  *
  * We also need to rewrite bound variable indices to be relative to this new reduced environment.
  */
-fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
-    Box::new(match expr {
+fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Expr {
+    match expr {
         Expr::Function {
             arity,
             body,
@@ -713,7 +751,7 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
                 .collect();
             Expr::Function {
                 arity,
-                body: rewrite_env_maps(*body, &child_env_map),
+                body: Box::new(rewrite_env_maps(*body, &child_env_map)),
                 env_map: new_env_map,
             }
         }
@@ -727,25 +765,39 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
             function,
             arguments,
         } => Expr::Apply {
-            function: rewrite_env_maps(*function, current_env_map),
+            function: Box::new(rewrite_env_maps(*function, current_env_map)),
             arguments: arguments
                 .into_iter()
-                .map(|argument| rewrite_env_maps(*argument, current_env_map))
+                .map(|argument| rewrite_env_maps(argument, current_env_map))
                 .collect(),
         },
-        Expr::Let { value, body } => {
-            let child_env_map: Vec<usize> = once(0)
-                .chain(current_env_map.iter().map(|x| x + 1))
-                .collect();
-            Expr::Let {
-                value: rewrite_env_maps(*value, &child_env_map),
-                body: rewrite_env_maps(*body, &child_env_map),
+        Expr::Declarations { decls, body } => {
+            let mut child_env_map: Vec<usize> = current_env_map.to_vec();
+            let mut new_decls = Vec::new();
+            for decl in decls {
+                match decl {
+                    Declaration::Let(expr) => {
+                        child_env_map =
+                            once(0).chain(child_env_map.iter().map(|x| x + 1)).collect();
+                        new_decls.push(Declaration::Let(rewrite_env_maps(expr, &child_env_map)));
+                    }
+                    Declaration::Type(constructors) => {
+                        child_env_map = (0..constructors.len())
+                            .chain(child_env_map.iter().map(|i| constructors.len() + i))
+                            .collect();
+                        new_decls.push(Declaration::Type(constructors));
+                    }
+                }
+            }
+            Expr::Declarations {
+                decls: new_decls,
+                body: Box::new(rewrite_env_maps(*body, &child_env_map)),
             }
         }
         Expr::Vec { values, vec_type } => Expr::Vec {
             values: values
                 .into_iter()
-                .map(|e| rewrite_env_maps(*e, current_env_map))
+                .map(|e| rewrite_env_maps(e, current_env_map))
                 .collect(),
             vec_type,
         },
@@ -754,12 +806,12 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
             true_branch,
             false_branch,
         } => Expr::If {
-            condition: rewrite_env_maps(*condition, current_env_map),
-            true_branch: rewrite_env_maps(*true_branch, current_env_map),
-            false_branch: rewrite_env_maps(*false_branch, current_env_map),
+            condition: Box::new(rewrite_env_maps(*condition, current_env_map)),
+            true_branch: Box::new(rewrite_env_maps(*true_branch, current_env_map)),
+            false_branch: Box::new(rewrite_env_maps(*false_branch, current_env_map)),
         },
         Expr::Match { value, cases } => Expr::Match {
-            value: rewrite_env_maps(*value, current_env_map),
+            value: Box::new(rewrite_env_maps(*value, current_env_map)),
             cases: cases
                 .into_iter()
                 .map(|(pattern, expr)| {
@@ -769,7 +821,7 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
                         .collect();
                     (
                         rewrite_env_map_pattern(pattern, current_env_map),
-                        rewrite_env_maps(*expr, &child_env_map),
+                        rewrite_env_maps(expr, &child_env_map),
                     )
                 })
                 .collect(),
@@ -779,16 +831,7 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Box<Expr> {
         Expr::BooleanConstant(_) => expr,
         Expr::Unit => expr,
         Expr::Builtin(_) => expr,
-        Expr::TypeDeclaration { constructors, body } => {
-            let child_env_map: Vec<usize> = (0..constructors.len())
-                .chain(current_env_map.iter().map(|i| constructors.len() + i))
-                .collect();
-            Expr::TypeDeclaration {
-                constructors,
-                body: rewrite_env_maps(*body, &child_env_map),
-            }
-        }
-    })
+    }
 }
 
 fn strip_comments(sexpr: Located<Sexpr<Token>>) -> Option<Located<Sexpr<Token>>> {
@@ -835,7 +878,7 @@ pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
             if !used_vars.is_empty() {
                 panic!("Vars referenced that don't exist, should be impossible");
             }
-            Ok(*rewrite_env_maps(*expr, &[]))
+            Ok(rewrite_env_maps(expr, &[]))
         }
     }
 }

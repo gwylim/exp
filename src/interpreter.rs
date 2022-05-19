@@ -1,6 +1,6 @@
 use crate::builtin::invoke_builtin;
 use crate::eq::eq;
-use crate::program::{Expr, PatternExpr};
+use crate::program::{Declaration, Expr, PatternExpr};
 use crate::value::{RunResult, RuntimeError, Value, VecType};
 use std::cell::RefCell;
 use std::collections::vec_deque::VecDeque;
@@ -192,11 +192,42 @@ fn run_inner<'a>(
         Expr::BooleanConstant(b) => Ok(Rc::new(Value::Boolean(*b))),
         Expr::Builtin(b) => Ok(Rc::new(Value::Builtin(*b))),
         Expr::Unit => Ok(Rc::new(Value::Unit)),
-        Expr::Let { value, body } => {
-            stack.push_front(Rc::new(Value::Recurse));
-            stack[0] = run_inner(unique_id, &value, stack)?;
+        Expr::Declarations { decls, body } => {
+            let mut var_count = 0;
+            for decl in decls {
+                match decl {
+                    Declaration::Let(value) => {
+                        stack.push_front(Rc::new(Value::Recurse));
+                        stack[0] = run_inner(unique_id, &value, stack)?;
+                        var_count += 1;
+                    }
+                    Declaration::Type(constructors) => {
+                        // TODO: It might make more sense to assign this id when compiling rather than here
+                        let type_id = create_id(unique_id);
+                        for (index, arity) in constructors.iter().enumerate() {
+                            stack.push_front(Rc::new(if *arity > 0 {
+                                Value::Constructor {
+                                    type_id,
+                                    index,
+                                    arity: *arity,
+                                }
+                            } else {
+                                // arity-0 constructors are not invoked
+                                Value::Constructed {
+                                    type_id,
+                                    index,
+                                    values: Vec::new(),
+                                }
+                            }));
+                        }
+                        var_count += constructors.len();
+                    }
+                }
+            }
             let result = run_inner(unique_id, &body, stack);
-            stack.pop_front();
+            for _ in 0..var_count {
+                stack.pop_front();
+            }
             result
         }
         Expr::Vec { values, vec_type } => {
@@ -249,31 +280,6 @@ fn run_inner<'a>(
             }
             let result = run_inner(unique_id, body, stack);
             for _ in 0..var_count {
-                stack.pop_front();
-            }
-            result
-        }
-        Expr::TypeDeclaration { constructors, body } => {
-            // TODO: It might make more sense to assign this id when compiling rather than here
-            let type_id = create_id(unique_id);
-            for (index, arity) in constructors.iter().enumerate() {
-                stack.push_front(Rc::new(if *arity > 0 {
-                    Value::Constructor {
-                        type_id,
-                        index,
-                        arity: *arity,
-                    }
-                } else {
-                    // arity-0 constructors are not invoked
-                    Value::Constructed {
-                        type_id,
-                        index,
-                        values: Vec::new(),
-                    }
-                }));
-            }
-            let result = run_inner(unique_id, body, stack);
-            for _ in 0..constructors.len() {
                 stack.pop_front();
             }
             result
