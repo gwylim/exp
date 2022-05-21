@@ -32,24 +32,37 @@ where
     let mut start = 0;
     let mut escaped = false;
     for (i, b) in s.bytes().enumerate() {
-        if b == (']' as u8) {
-            if escaped {
-                handle_part(&s[i..(i + 1)]);
-                escaped = false;
-            } else {
-                panic!("Unexpected end of string character");
+        match b {
+            b']' => {
+                if escaped {
+                    handle_part("]");
+                    escaped = false;
+                } else {
+                    panic!("Unexpected end of string character");
+                }
             }
-        } else if b == ('\\' as u8) {
-            if escaped {
-                handle_part(&s[i..(i + 1)]);
-                escaped = false;
-            } else {
-                handle_part(&s[start..i]);
-                start = i + 2;
-                escaped = true;
+            b'\\' => {
+                if escaped {
+                    handle_part("\\");
+                    escaped = false;
+                } else {
+                    handle_part(&s[start..i]);
+                    start = i + 2;
+                    escaped = true;
+                }
             }
-        } else if escaped {
-            return Err(i - 1);
+            _ => {
+                if escaped {
+                    handle_part(match b {
+                        b'n' => Ok::<&str, usize>("\n"),
+                        b'r' => Ok("\r"),
+                        b't' => Ok("\t"),
+                        b'0' => Ok("\0"),
+                        _ => return Err(i - 1),
+                    }?);
+                    escaped = false;
+                }
+            }
         }
     }
     if escaped {
