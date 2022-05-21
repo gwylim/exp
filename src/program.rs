@@ -92,11 +92,15 @@ pub enum Expr {
     },
 }
 
-fn lookup(var: &str, env: &VecDeque<&str>) -> Option<usize> {
-    env.iter().position(|s| var.eq(*s))
+fn lookup(var: &str, env: &VecDeque<Option<&str>>) -> Option<usize> {
+    env.iter()
+        .position(|s| if let Some(v) = s { var.eq(*v) } else { false })
 }
 
-fn compile_atom(atom: &Token, env: &VecDeque<&str>) -> Result<(Expr, Vec<usize>), ParseError> {
+fn compile_atom(
+    atom: &Token,
+    env: &VecDeque<Option<&str>>,
+) -> Result<(Expr, Vec<usize>), ParseError> {
     match atom {
         Token::StringLiteral(s) => result(Expr::StringConstant(s.to_string())),
         Token::NumericLiteral(x) => result(Expr::NumericConstant(*x)),
@@ -149,10 +153,12 @@ fn parent_used_vars(used_vars: Vec<usize>, count: usize) -> Vec<usize> {
         .collect()
 }
 
-fn read_function_vars(list: &[Located<Sexpr<Token>>]) -> Result<Vec<&str>, Located<ParseError>> {
+fn read_function_vars(
+    list: &[Located<Sexpr<Token>>],
+) -> Result<Vec<Option<&str>>, Located<ParseError>> {
     list.iter()
         .map(|sexpr| match &sexpr.value {
-            Sexpr::Atom(Token::IdentifierBinding(s)) => Ok(s.as_deref().unwrap_or("")),
+            Sexpr::Atom(Token::IdentifierBinding(s)) => Ok(s.as_deref()),
             _ => Err(Located::new(
                 sexpr.source_range.clone(),
                 ParseError::InvalidVariableBinding,
@@ -316,12 +322,12 @@ fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> 
 
 fn compile_pattern<'a>(
     sexpr: &'a Located<Sexpr<Token>>,
-    env: &mut VecDeque<&'a str>,
-    vars: &mut Vec<&'a str>,
+    env: &mut VecDeque<Option<&'a str>>,
+    vars: &mut Vec<Option<&'a str>>,
 ) -> Result<(PatternExpr, Vec<usize>), Located<ParseError>> {
     match &sexpr.value {
         Sexpr::Atom(Token::IdentifierBinding(s)) => {
-            vars.push(s.as_deref().unwrap_or(""));
+            vars.push(s.as_deref());
             result(PatternExpr::BindVar)
         }
         Sexpr::List(list) => {
@@ -408,7 +414,7 @@ fn compile_pattern<'a>(
 fn compile_case<'a>(
     pattern_sexpr: &'a Located<Sexpr<Token>>,
     body_sexpr: &'a Located<Sexpr<Token>>,
-    env: &mut VecDeque<&'a str>,
+    env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(PatternExpr, Expr, Vec<usize>), Located<ParseError>> {
     let mut defined_vars = Vec::new();
     let (pattern, pattern_used_vars) = compile_pattern(pattern_sexpr, env, &mut defined_vars)?;
@@ -433,7 +439,7 @@ fn compile_case<'a>(
 fn compile_cases<'a>(
     source_range: &Range<usize>,
     sexprs: &'a [Located<Sexpr<Token>>],
-    env: &mut VecDeque<&'a str>,
+    env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(Vec<(PatternExpr, Expr)>, Vec<usize>), Located<ParseError>> {
     if sexprs.len() % 2 != 0 {
         return Err(Located::new(
@@ -454,11 +460,11 @@ fn compile_cases<'a>(
 
 fn compile_data_constructor<'a>(
     sexpr: &'a Located<Sexpr<Token>>,
-    env: &mut VecDeque<&'a str>,
+    env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<usize, Located<ParseError>> {
     match &sexpr.value {
         Sexpr::Atom(Token::IdentifierBinding(s)) => {
-            env.push_front(s.as_deref().unwrap_or(""));
+            env.push_front(s.as_deref());
             Ok(0)
         }
         Sexpr::List(list) => {
@@ -469,7 +475,7 @@ fn compile_data_constructor<'a>(
                 ));
             }
             if let Sexpr::Atom(Token::IdentifierBinding(s)) = &list[0].value {
-                env.push_front(s.as_deref().unwrap_or(""));
+                env.push_front(s.as_deref());
             } else {
                 return Err(Located::new(
                     list[0].source_range.clone(),
@@ -497,7 +503,7 @@ fn compile_data_constructor<'a>(
 fn apply<'a>(
     function: (Expr, Vec<usize>),
     rest: &'a [Located<Sexpr<Token>>],
-    env: &mut VecDeque<&'a str>,
+    env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
     let (function_expr, mut used_vars) = function;
     let mut arguments = Vec::new();
@@ -517,7 +523,7 @@ fn apply<'a>(
 
 fn compile_sexpr<'a>(
     mut sexpr: &'a Located<Sexpr<Token>>,
-    env: &mut VecDeque<&'a str>,
+    env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
     let mut decls = Vec::new();
     let mut var_count = 0;
@@ -562,7 +568,7 @@ fn compile_sexpr<'a>(
                                 let (body, args) = rest.split_last().unwrap();
                                 let vars = read_function_vars(args)?;
                                 for v in vars.iter().rev() {
-                                    env.push_front(v);
+                                    env.push_front(*v);
                                 }
                                 var_count += vars.len();
                                 let (expr, expr_used_vars) = compile_sexpr(body, env)?;
@@ -588,8 +594,7 @@ fn compile_sexpr<'a>(
                                 }
                                 match &rest[0].value {
                                     Sexpr::Atom(Token::IdentifierBinding(s)) => {
-                                        let name = s.as_deref().unwrap_or("");
-                                        env.push_front(name);
+                                        env.push_front(s.as_deref());
                                         var_count += 1;
                                         let (value_expression, value_used_vars) =
                                             compile_sexpr(&rest[1], env)?;
