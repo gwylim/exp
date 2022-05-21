@@ -73,18 +73,27 @@ fn match_pattern<'a>(
             matches.push(value.clone());
             Ok(true)
         }
-        PatternExpr::Tuple(pattern_vec) => {
+        PatternExpr::Vec {
+            values: pattern_values,
+            vec_type,
+        } => {
             if let Value::Vec {
                 values,
-                vec_type: VecType::Tuple,
+                vec_type: vec_type1,
             } = &**value
             {
-                if pattern_vec.len() != values.len() {
+                if *vec_type != *vec_type1 {
                     return Err(RuntimeError::TypeError);
+                }
+                if pattern_values.len() != values.len() {
+                    return match vec_type {
+                        VecType::Array => Ok(false),
+                        VecType::Tuple => Err(RuntimeError::TypeError),
+                    };
                 }
                 let mut matched = true;
                 // We loop over all elements to catch any type errors
-                for (x, y) in zip(pattern_vec, values) {
+                for (x, y) in zip(pattern_values, values) {
                     if !match_pattern(x, y, stack, matches)? {
                         matched = false;
                     }
@@ -150,7 +159,10 @@ fn match_pattern<'a>(
                 PatternExpr::Unit => eq(&Value::Unit, &*value),
                 PatternExpr::Bound(i) => eq(&stack[*i], &*value),
                 PatternExpr::BindVar => unreachable!(),
-                PatternExpr::Tuple(_) => unreachable!(),
+                PatternExpr::Vec {
+                    values: _,
+                    vec_type: _,
+                } => unreachable!(),
                 PatternExpr::Constructed { .. } => unreachable!(),
             }?;
             Ok(matched)

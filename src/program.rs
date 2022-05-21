@@ -31,7 +31,10 @@ fn result<Expr, E>(expr: Expr) -> Result<(Expr, Vec<usize>), E> {
 #[derive(Debug)]
 pub enum PatternExpr {
     BindVar,
-    Tuple(Vec<PatternExpr>),
+    Vec {
+        values: Vec<PatternExpr>,
+        vec_type: VecType,
+    },
     Constructed {
         constructor: usize,
         arguments: Vec<PatternExpr>,
@@ -161,7 +164,10 @@ fn read_function_vars(list: &[Located<Sexpr<Token>>]) -> Result<Vec<&str>, Locat
 fn var_count(pattern: &PatternExpr) -> usize {
     match pattern {
         PatternExpr::BindVar => 1,
-        PatternExpr::Tuple(v) => v.iter().map(|e| var_count(e)).sum(),
+        PatternExpr::Vec {
+            values,
+            vec_type: _,
+        } => values.iter().map(|e| var_count(e)).sum(),
         PatternExpr::NumericConstant(_) => 0,
         PatternExpr::StringConstant(_) => 0,
         PatternExpr::BooleanConstant(_) => 0,
@@ -327,7 +333,8 @@ fn compile_pattern<'a>(
             }
             let (first, rest) = list.split_first().unwrap();
             match &first.value {
-                Sexpr::Atom(Token::Keyword(Keyword::Tuple)) => {
+                Sexpr::Atom(Token::Keyword(Keyword::Tuple))
+                | Sexpr::Atom(Token::Keyword(Keyword::Array)) => {
                     let mut patterns = Vec::with_capacity(rest.len());
                     let mut used_vars = vec![];
                     for sexpr in rest {
@@ -335,7 +342,21 @@ fn compile_pattern<'a>(
                         patterns.push(pattern);
                         used_vars = merge(&used_vars, &pattern_used_vars);
                     }
-                    Ok((PatternExpr::Tuple(patterns), used_vars))
+                    let vec_type = match &first.value {
+                        Sexpr::Atom(Token::Keyword(k)) => match k {
+                            Keyword::Tuple => VecType::Tuple,
+                            Keyword::Array => VecType::Array,
+                            _ => unreachable!(),
+                        },
+                        _ => unreachable!(),
+                    };
+                    Ok((
+                        PatternExpr::Vec {
+                            values: patterns,
+                            vec_type,
+                        },
+                        used_vars,
+                    ))
                 }
                 Sexpr::Atom(Token::Identifier(s)) => {
                     let constructor = match lookup(s, env) {
@@ -702,11 +723,13 @@ fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize])
         PatternExpr::Bound(i) => {
             PatternExpr::Bound(current_env_map.iter().position(|j| i == *j).unwrap())
         }
-        PatternExpr::Tuple(vec) => PatternExpr::Tuple(
-            vec.into_iter()
+        PatternExpr::Vec { values, vec_type } => PatternExpr::Vec {
+            values: values
+                .into_iter()
                 .map(|e| rewrite_env_map_pattern(e, current_env_map))
                 .collect(),
-        ),
+            vec_type,
+        },
         PatternExpr::BindVar => pattern_expr,
         PatternExpr::NumericConstant(_) => pattern_expr,
         PatternExpr::StringConstant(_) => pattern_expr,
