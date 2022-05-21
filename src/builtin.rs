@@ -15,6 +15,7 @@ pub enum Builtin {
     Sub,
     Mul,
     Div,
+    Mod,
     StringLength,
     Substring,
     ConcatString,
@@ -38,6 +39,7 @@ pub fn get_builtin(s: &str) -> Option<Builtin> {
         "sub" => Some(Builtin::Sub),
         "mul" => Some(Builtin::Mul),
         "div" => Some(Builtin::Div),
+        "mod" => Some(Builtin::Mod),
         "string_length" => Some(Builtin::StringLength),
         "substring" => Some(Builtin::Substring),
         "concat_string" => Some(Builtin::ConcatString),
@@ -61,6 +63,7 @@ pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) ->
         Builtin::Sub => invoke_binary(sub, argument_values),
         Builtin::Mul => invoke_binary(mul, argument_values),
         Builtin::Div => invoke_binary(div, argument_values),
+        Builtin::Mod => invoke_binary(mod_function, argument_values),
         Builtin::Substring => invoke_ternary(substring, argument_values),
         Builtin::ConcatString => invoke_binary(concat_string, argument_values),
         Builtin::GetLine => invoke_nullary(get_line, argument_values),
@@ -287,6 +290,10 @@ fn mul(x: &f64, y: &f64) -> f64 {
 
 fn div(x: &f64, y: &f64) -> f64 {
     *x / *y
+}
+
+fn mod_function(x: &f64, n: &f64) -> f64 {
+    *x % *n
 }
 
 fn substring<'a>(s: &String, start: &f64, end: &f64) -> String {
