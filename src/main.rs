@@ -1,5 +1,6 @@
 mod builtin;
 mod eq;
+mod format;
 mod interpreter;
 mod located;
 mod program;
@@ -7,6 +8,7 @@ mod sexpr;
 mod token;
 mod value;
 
+use crate::format::format;
 use crate::interpreter::run;
 use crate::program::{compile, ParseError};
 use crate::sexpr::parse;
@@ -27,6 +29,7 @@ struct Args {
 #[derive(Subcommand)]
 enum Command {
     Run { file: PathBuf },
+    Format { file: PathBuf },
 }
 
 fn get_line_end(s: &str, mut i: usize) -> usize {
@@ -80,34 +83,44 @@ fn print_file_error(
 }
 
 fn main() {
-    let Args {
-        command: Command::Run { file },
-    } = Args::parse();
-    let input = fs::read_to_string(file.clone()).expect("Failed to read file");
-    match compile(&input) {
-        Ok(expr) => {
-            println!("{}", run(&expr).expect("Exception in execution"));
+    let args: Args = Args::parse();
+    match args.command {
+        Command::Run { file } => {
+            let input = fs::read_to_string(file.clone()).expect("Failed to read file");
+            match compile(&input) {
+                Ok(expr) => {
+                    println!("{}", run(&expr).expect("Exception in execution"));
+                }
+                Err(err) => {
+                    print_file_error(
+                        &file,
+                        &input,
+                        err.source_range,
+                        match err.value {
+                            ParseError::InvalidToken(_) => "Invalid token",
+                            ParseError::UnexpectedCharacter => "Unexpected character",
+                            ParseError::InvalidVariableBinding => "Invalid variable binding",
+                            ParseError::CyclicDefinition => "Cycle in definition",
+                            ParseError::UndefinedVariable => "Not in scope",
+                            ParseError::InvalidExpressionInPattern => {
+                                "Invalid expression in pattern"
+                            }
+                            ParseError::InvalidSyntax => "Invalid syntax",
+                            ParseError::InvalidFieldDeclaration => {
+                                "Invalid field declaration; named fields are not yet supported"
+                            }
+                            ParseError::UnexpectedToken => "Unexpected token",
+                            ParseError::EmptyInput => "Empty input",
+                        },
+                    );
+                }
+            }
         }
-        Err(err) => {
-            print_file_error(
-                &file,
-                &input,
-                err.source_range,
-                match err.value {
-                    ParseError::InvalidToken(_) => "Invalid token",
-                    ParseError::UnexpectedCharacter => "Unexpected character",
-                    ParseError::InvalidVariableBinding => "Invalid variable binding",
-                    ParseError::CyclicDefinition => "Cycle in definition",
-                    ParseError::UndefinedVariable => "Not in scope",
-                    ParseError::InvalidExpressionInPattern => "Invalid expression in pattern",
-                    ParseError::InvalidSyntax => "Invalid syntax",
-                    ParseError::InvalidFieldDeclaration => {
-                        "Invalid field declaration; named fields are not yet supported"
-                    }
-                    ParseError::UnexpectedToken => "Unexpected token",
-                    ParseError::EmptyInput => "Empty input",
-                },
-            );
+        Command::Format { file } => {
+            let input = fs::read_to_string(file.clone()).expect("Failed to read file");
+            let mut output = String::new();
+            format(&input, &mut output).expect("Invalid file");
+            fs::write(file, output).expect("Failed to write file");
         }
     }
 }

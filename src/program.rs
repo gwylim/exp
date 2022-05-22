@@ -3,9 +3,8 @@ use crate::located::Located;
 use crate::sexpr::{unescape_string, Sexpr};
 use crate::token::{Keyword, Token};
 use crate::value::VecType;
-use crate::{parse, InvalidTokenError};
+use crate::{parse, token, InvalidTokenError};
 use std::collections::vec_deque::VecDeque;
-use std::convert::TryFrom;
 use std::iter::once;
 use std::ops::Range;
 
@@ -98,7 +97,7 @@ fn lookup(var: &str, env: &VecDeque<Option<&str>>) -> Option<usize> {
 }
 
 fn compile_atom(
-    atom: &Token,
+    atom: &Token<String>,
     env: &VecDeque<Option<&str>>,
 ) -> Result<(Expr, Vec<usize>), ParseError> {
     match atom {
@@ -154,7 +153,7 @@ fn parent_used_vars(used_vars: Vec<usize>, count: usize) -> Vec<usize> {
 }
 
 fn read_function_vars(
-    list: &[Located<Sexpr<Token>>],
+    list: &[Located<Sexpr<Token<String>>>],
 ) -> Result<Vec<Option<&str>>, Located<ParseError>> {
     list.iter()
         .map(|sexpr| match &sexpr.value {
@@ -321,7 +320,7 @@ fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> 
 }
 
 fn compile_pattern<'a>(
-    sexpr: &'a Located<Sexpr<Token>>,
+    sexpr: &'a Located<Sexpr<Token<String>>>,
     env: &mut VecDeque<Option<&'a str>>,
     vars: &mut Vec<Option<&'a str>>,
 ) -> Result<(PatternExpr, Vec<usize>), Located<ParseError>> {
@@ -412,8 +411,8 @@ fn compile_pattern<'a>(
 }
 
 fn compile_case<'a>(
-    pattern_sexpr: &'a Located<Sexpr<Token>>,
-    body_sexpr: &'a Located<Sexpr<Token>>,
+    pattern_sexpr: &'a Located<Sexpr<Token<String>>>,
+    body_sexpr: &'a Located<Sexpr<Token<String>>>,
     env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(PatternExpr, Expr, Vec<usize>), Located<ParseError>> {
     let mut defined_vars = Vec::new();
@@ -438,7 +437,7 @@ fn compile_case<'a>(
 
 fn compile_cases<'a>(
     source_range: &Range<usize>,
-    sexprs: &'a [Located<Sexpr<Token>>],
+    sexprs: &'a [Located<Sexpr<Token<String>>>],
     env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(Vec<(PatternExpr, Expr)>, Vec<usize>), Located<ParseError>> {
     if sexprs.len() % 2 != 0 {
@@ -459,7 +458,7 @@ fn compile_cases<'a>(
 }
 
 fn compile_data_constructor<'a>(
-    sexpr: &'a Located<Sexpr<Token>>,
+    sexpr: &'a Located<Sexpr<Token<String>>>,
     env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<usize, Located<ParseError>> {
     match &sexpr.value {
@@ -502,7 +501,7 @@ fn compile_data_constructor<'a>(
 
 fn apply<'a>(
     function: (Expr, Vec<usize>),
-    rest: &'a [Located<Sexpr<Token>>],
+    rest: &'a [Located<Sexpr<Token<String>>>],
     env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
     let (function_expr, mut used_vars) = function;
@@ -522,7 +521,7 @@ fn apply<'a>(
 }
 
 fn compile_sexpr<'a>(
-    mut sexpr: &'a Located<Sexpr<Token>>,
+    mut sexpr: &'a Located<Sexpr<Token<String>>>,
     env: &mut VecDeque<Option<&'a str>>,
 ) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
     let mut decls = Vec::new();
@@ -862,9 +861,9 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Expr {
     }
 }
 
-fn strip_comments(sexpr: Located<Sexpr<Token>>) -> Option<Located<Sexpr<Token>>> {
+fn strip_comments(sexpr: Located<Sexpr<Token<String>>>) -> Option<Located<Sexpr<Token<String>>>> {
     match sexpr.value {
-        Sexpr::Atom(Token::Comment) => None,
+        Sexpr::Atom(Token::Comment(_)) => None,
         Sexpr::Atom(_) => Some(sexpr),
         Sexpr::List(list) => Some(Located::new(
             sexpr.source_range,
@@ -877,10 +876,12 @@ pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
     let sexpr = parse(
         s,
         |s, quoted| {
-            Token::try_from(if quoted {
-                unescape_string(s).unwrap()
-            } else {
-                s.to_string()
+            token::read_token(s, |s| {
+                if quoted {
+                    unescape_string(s).unwrap()
+                } else {
+                    s.to_string()
+                }
             })
             .map_err(|e| ParseError::InvalidToken(e))
         },

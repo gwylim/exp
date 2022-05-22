@@ -86,13 +86,13 @@ fn char_range(i: usize) -> Range<usize> {
     i..(i + 1)
 }
 
-pub fn parse<T, F, E>(
-    s: &str,
+pub fn parse<'a, T, F, E>(
+    s: &'a str,
     get_token: F,
     unexpected_character: E,
 ) -> Result<Located<Sexpr<T>>, Located<E>>
 where
-    F: Fn(&str, bool) -> Result<T, E>,
+    F: Fn(&'a str, bool) -> Result<T, E>,
 {
     let mut stack: Vec<StackEntry<T>> = vec![StackEntry {
         start: 0,
