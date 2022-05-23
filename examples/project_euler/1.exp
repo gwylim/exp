@@ -1,0 +1,8 @@
+[!Source: https://projecteuler.net/problem=1]
+; let $solve (
+    fn $i
+  ; if (leq 1000 i) 0
+  ; let $r (solve; add i 1)
+  ; if (or (eq 0; mod i 3); eq 0; mod i 5) (add i r) r
+  )
+; solve 3

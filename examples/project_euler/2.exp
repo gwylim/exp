@@ -1,0 +1,10 @@
+[!Source: https://projecteuler.net/problem=2]
+; let $even (fn $x; eq 0; mod x 2)
+; let $solve (
+    fn $a $b
+  ; if (not; leq b 4000000) 0
+  ; add (if (even b) b 0)
+  ; solve b
+  ; add a b
+  )
+; solve 1 1
