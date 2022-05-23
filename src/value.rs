@@ -41,6 +41,7 @@ pub enum Value<'a> {
         index: usize,
         values: Vec<Rc<Value<'a>>>,
     },
+    Next(Vec<Rc<Value<'a>>>),
 }
 
 impl<'a> PartialEq for Value<'a> {
@@ -102,6 +103,13 @@ impl<'a> Display for Value<'a> {
                     v.fmt(f)?;
                 }
                 write!(f, ")")
+            }
+            Value::Next(arguments) => {
+                f.write_str("(<next>")?;
+                for arg in arguments {
+                    write!(f, " {}", arg)?;
+                }
+                f.write_str(")")
             }
         }
     }

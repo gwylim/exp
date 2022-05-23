@@ -30,6 +30,8 @@ fn format_token<W: Write>(token: &Token<(&str, bool)>, write: &mut W) -> fmt::Re
                 Keyword::Case => "case",
                 Keyword::If => "if",
                 Keyword::Function => "fn",
+                Keyword::Loop => "loop",
+                Keyword::Next => "next",
                 Keyword::Tuple => "#",
                 Keyword::Array => "@",
             }

@@ -296,6 +296,36 @@ fn run_inner<'a>(
             }
             result
         }
+        Expr::Loop { initial_vars, body } => {
+            let mut vars = Vec::new();
+            for var in initial_vars {
+                vars.push(run_inner(unique_id, var, stack)?);
+            }
+            for var in vars {
+                stack.push_front(var);
+            }
+            loop {
+                let result = run_inner(unique_id, body, stack)?;
+                for _ in 0..initial_vars.len() {
+                    stack.pop_front();
+                }
+                match &*result {
+                    Value::Next(new_vars) => {
+                        for var in new_vars {
+                            stack.push_front(var.clone());
+                        }
+                    }
+                    _ => break Ok(result),
+                }
+            }
+        }
+        Expr::Next(arguments) => {
+            let mut args = Vec::new();
+            for arg in arguments {
+                args.push(run_inner(unique_id, arg, stack)?);
+            }
+            Ok(Rc::new(Value::Next(args)))
+        }
     }
 }
 
@@ -463,5 +493,17 @@ mod test {
             eval_error(&"; data ($a _ _); match (a 1 1) (a $x) x"),
             RuntimeError::InvalidConstructorPattern
         );
+    }
+
+    #[test]
+    fn looping() {
+        // Sum of first n triangular numbers: (n-2)(n-1)n / 6 = 8 * 9 * 10 / 6 = 120
+        eval(
+            &"; loop ($i 0) ($j 0) ($r 0)
+                  ; if (leq 10 j) r
+                  ; if (leq j i) (next 0 (add j 1) r)
+                  ; next (add i 1) j (add r i)",
+            |val| assert_eq!(val, &Value::Number(120.0)),
+        )
     }
 }

@@ -19,6 +19,8 @@ pub enum Keyword {
     Function,
     Tuple,
     Array,
+    Loop,
+    Next,
 }
 
 #[derive(Debug)]
@@ -58,6 +60,8 @@ where
                 "if" => Ok(Token::Keyword(Keyword::If)),
                 "data" => Ok(Token::Keyword(Keyword::Data)),
                 "fn" => Ok(Token::Keyword(Keyword::Function)),
+                "loop" => Ok(Token::Keyword(Keyword::Loop)),
+                "next" => Ok(Token::Keyword(Keyword::Next)),
                 "#" => Ok(Token::Keyword(Keyword::Tuple)),
                 "@" => Ok(Token::Keyword(Keyword::Array)),
                 "_" => Ok(Token::IdentifierBinding(None)),

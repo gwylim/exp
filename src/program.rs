@@ -89,6 +89,11 @@ pub enum Expr {
         value: Box<Expr>,
         cases: Vec<(PatternExpr, Expr)>,
     },
+    Loop {
+        initial_vars: Vec<Expr>,
+        body: Box<Expr>,
+    },
+    Next(Vec<Expr>),
 }
 
 fn lookup(var: &str, env: &VecDeque<Option<&str>>) -> Option<usize> {
@@ -256,6 +261,17 @@ fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
                 check_no_recursion(body, level + var_count(pattern))?;
             }
         }
+        Expr::Loop { initial_vars, body } => {
+            for var in initial_vars {
+                check_no_recursion(var, level)?;
+            }
+            check_no_recursion(body, level + initial_vars.len())?;
+        }
+        Expr::Next(arguments) => {
+            for arg in arguments {
+                check_no_recursion(arg, level)?;
+            }
+        }
         Expr::NumericConstant(_) => {}
         Expr::StringConstant(_) => {}
         Expr::BooleanConstant(_) => {}
@@ -307,6 +323,17 @@ fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> 
             check_no_recursion(value, level)?;
             for (pattern, body) in cases {
                 check_recursion_guarded(body, level + var_count(pattern))?;
+            }
+        }
+        Expr::Loop { initial_vars, body } => {
+            for var in initial_vars {
+                check_no_recursion(var, level)?;
+            }
+            check_recursion_guarded(body, level + initial_vars.len())?;
+        }
+        Expr::Next(arguments) => {
+            for arg in arguments {
+                check_no_recursion(arg, level)?;
             }
         }
         Expr::NumericConstant(_) => {}
@@ -520,6 +547,27 @@ fn apply<'a>(
     ))
 }
 
+fn compile_loop_var<'a>(
+    sexpr: &'a Located<Sexpr<Token<String>>>,
+    env: &mut VecDeque<Option<&'a str>>,
+) -> Result<(Option<&'a str>, Expr, Vec<usize>), Located<ParseError>> {
+    match &sexpr.value {
+        Sexpr::Atom(_) => Err(sexpr.with_value(ParseError::InvalidSyntax)),
+        Sexpr::List(list) => {
+            if list.len() != 2 {
+                return Err(sexpr.with_value(ParseError::InvalidSyntax));
+            }
+            match &list[0].value {
+                Sexpr::Atom(Token::IdentifierBinding(s)) => {
+                    let (value, value_used_vars) = compile_sexpr(&list[1], env)?;
+                    Ok((s.as_deref(), value, value_used_vars))
+                }
+                _ => Err(list[0].with_value(ParseError::InvalidVariableBinding)),
+            }
+        }
+    }
+}
+
 fn compile_sexpr<'a>(
     mut sexpr: &'a Located<Sexpr<Token<String>>>,
     env: &mut VecDeque<Option<&'a str>>,
@@ -583,6 +631,49 @@ fn compile_sexpr<'a>(
                                     body: Box::new(expr),
                                     env_map: parent_used_vars,
                                 };
+                            }
+                            Token::Keyword(Keyword::Loop) => {
+                                if rest.len() < 1 {
+                                    return Err(sexpr.with_value(ParseError::InvalidSyntax));
+                                }
+                                let mut var_names = Vec::new();
+                                let mut initial_vars = Vec::new();
+                                for i in 0..rest.len() - 1 {
+                                    let (var_name, initial_value, initial_value_used_vars) =
+                                        compile_loop_var(&rest[i], env)?;
+                                    var_names.push(var_name);
+                                    initial_vars.push(initial_value);
+                                    used_vars = merge(&used_vars, &initial_value_used_vars);
+                                }
+                                for v in var_names {
+                                    env.push_front(v);
+                                }
+                                var_count += initial_vars.len();
+                                let (body, body_used_vars) =
+                                    compile_sexpr(&rest[rest.len() - 1], env)?;
+                                used_vars =
+                                    merge(&used_vars, &parent_used_vars(body_used_vars, var_count));
+                                for _ in 0..initial_vars.len() {
+                                    env.pop_front();
+                                }
+                                var_count -= initial_vars.len();
+                                break Expr::Loop {
+                                    initial_vars,
+                                    body: Box::new(body),
+                                };
+                            }
+                            // FIXME: check that next only occurs in valid positions
+                            Token::Keyword(Keyword::Next) => {
+                                let mut arguments = Vec::new();
+                                for sexpr in rest {
+                                    let (expr, expr_used_vars) = compile_sexpr(sexpr, env)?;
+                                    used_vars = merge(
+                                        &used_vars,
+                                        &parent_used_vars(expr_used_vars, var_count),
+                                    );
+                                    arguments.push(expr);
+                                }
+                                break Expr::Next(arguments);
                             }
                             Token::Keyword(Keyword::Let) => {
                                 if rest.len() != 3 {
@@ -858,6 +949,26 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Expr {
         Expr::BooleanConstant(_) => expr,
         Expr::Unit => expr,
         Expr::Builtin(_) => expr,
+        Expr::Loop { initial_vars, body } => {
+            let new_initial_vars: Vec<Expr> = initial_vars
+                .into_iter()
+                .map(|e| rewrite_env_maps(e, current_env_map))
+                .collect();
+            let child_env_map: Vec<usize> = (0..new_initial_vars.len())
+                .chain(current_env_map.iter().map(|i| new_initial_vars.len() + i))
+                .collect();
+            let new_body = rewrite_env_maps(*body, &child_env_map);
+            Expr::Loop {
+                initial_vars: new_initial_vars,
+                body: Box::new(new_body),
+            }
+        }
+        Expr::Next(arguments) => Expr::Next(
+            arguments
+                .into_iter()
+                .map(|e| rewrite_env_maps(e, current_env_map))
+                .collect(),
+        ),
     }
 }
 
