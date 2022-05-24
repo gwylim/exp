@@ -105,6 +105,7 @@ fn compile_atom(
     env: &VecDeque<Option<&str>>,
 ) -> Result<(Expr, Vec<usize>), ParseError> {
     match atom {
+        Token::Keyword(Keyword::Unit) => result(Expr::Unit),
         Token::StringLiteral(s) => result(Expr::StringConstant(s.to_string())),
         Token::NumericLiteral(x) => result(Expr::NumericConstant(*x)),
         Token::BooleanLiteral(b) => result(Expr::BooleanConstant(*b)),
@@ -584,7 +585,6 @@ fn compile_sexpr<'a>(
                 break expr;
             }
             Sexpr::List(list) => match list.split_first() {
-                None => break Expr::Unit,
                 Some((head, rest)) => match &head.value {
                     Sexpr::Atom(token) => {
                         match token {
@@ -794,6 +794,7 @@ fn compile_sexpr<'a>(
                         break expr;
                     }
                 },
+                None => return Err(sexpr.with_value(ParseError::InvalidSyntax)),
             },
         }
     };

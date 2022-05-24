@@ -32,6 +32,7 @@ fn format_token<W: Write>(token: &Token<(&str, bool)>, write: &mut W) -> fmt::Re
                 Keyword::Function => "fn",
                 Keyword::Loop => "loop",
                 Keyword::Next => "next",
+                Keyword::Unit => "unit",
                 Keyword::Tuple => "#",
                 Keyword::Array => "@",
             }

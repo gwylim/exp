@@ -60,7 +60,7 @@ impl<'a> Display for Value<'a> {
             Value::Number(n) => n.fmt(f),
             Value::String(s) => write!(f, "[\"{}]", escape_string(s)),
             Value::Boolean(b) => b.fmt(f),
-            Value::Unit => write!(f, "()"),
+            Value::Unit => f.write_str("unit"),
             Value::Builtin(_b) => write!(f, "<builtin function>"),
             Value::Vec {
                 values: vec,
