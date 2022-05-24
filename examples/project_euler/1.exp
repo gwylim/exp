@@ -1,4 +1,4 @@
-[!Source: https://projecteuler.net/problem=1]
+; [!Source: https://projecteuler.net/problem=1]
 ; let $divides (fn $a $b; eq 0; mod b a)
 ; loop ($i 3) ($r 0)
 ; if (leq 1000 i) r

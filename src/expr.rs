@@ -20,7 +20,6 @@ pub enum ParseError {
     InvalidSyntax,
     // Intending to support named fields, but for now they must always be _
     InvalidFieldDeclaration,
-    EmptyInput,
 }
 
 fn result<Expr, E>(expr: Expr) -> Result<(Expr, Vec<usize>), E> {
@@ -972,14 +971,25 @@ fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Expr {
     }
 }
 
-fn strip_comments(sexpr: Located<Sexpr<Token<String>>>) -> Option<Located<Sexpr<Token<String>>>> {
+fn strip_comments(
+    sexpr: Located<Sexpr<Token<String>>>,
+) -> Result<Located<Sexpr<Token<String>>>, Located<ParseError>> {
     match sexpr.value {
-        Sexpr::Atom(Token::Comment(_)) => None,
-        Sexpr::Atom(_) => Some(sexpr),
-        Sexpr::List(list) => Some(Located::new(
-            sexpr.source_range,
-            Sexpr::List(list.into_iter().flat_map(|e| strip_comments(e)).collect()),
-        )),
+        Sexpr::Atom(Token::Comment(_)) => Err(sexpr.with_value(ParseError::InvalidSyntax)),
+        Sexpr::Atom(_) => Ok(sexpr),
+        Sexpr::List(mut list) => {
+            if list.len() == 2 {
+                match &list[0].value {
+                    Sexpr::Atom(Token::Comment(_)) => return Ok(strip_comments(list.remove(1))?),
+                    _ => {}
+                }
+            }
+            let mut result = Vec::new();
+            for e in list {
+                result.push(strip_comments(e)?);
+            }
+            Ok(Located::new(sexpr.source_range, Sexpr::List(result)))
+        }
     }
 }
 
@@ -998,27 +1008,10 @@ pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
         },
         ParseError::UnexpectedCharacter,
     )?;
-    let sexpr_no_comments = strip_comments(sexpr).unwrap();
-    match sexpr_no_comments.value {
-        Sexpr::Atom(_) => panic!("Expected list"),
-        Sexpr::List(list) => {
-            if list.is_empty() {
-                return Err(Located::new(
-                    sexpr_no_comments.source_range.clone(),
-                    ParseError::EmptyInput,
-                ));
-            }
-            if list.len() > 1 {
-                return Err(Located::new(
-                    list[1].source_range.clone(),
-                    ParseError::UnexpectedToken,
-                ));
-            }
-            let (expr, used_vars) = compile_sexpr(&list[0], &mut VecDeque::new())?;
-            if !used_vars.is_empty() {
-                panic!("Vars referenced that don't exist, should be impossible");
-            }
-            Ok(rewrite_env_maps(expr, &[]))
-        }
+    let sexpr_no_comments = strip_comments(sexpr)?;
+    let (expr, used_vars) = compile_sexpr(&sexpr_no_comments, &mut VecDeque::new())?;
+    if !used_vars.is_empty() {
+        panic!("Vars referenced that don't exist, should be impossible");
     }
+    Ok(rewrite_env_maps(expr, &[]))
 }

@@ -1,4 +1,4 @@
-[!Source: https://projecteuler.net/problem=4]
+; [!Source: https://projecteuler.net/problem=4]
 ; data ($some _) $none
 ; let $reverse (
     fn $s

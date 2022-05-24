@@ -110,7 +110,6 @@ fn main() {
                                 "Invalid field declaration; named fields are not yet supported"
                             }
                             ParseError::UnexpectedToken => "Unexpected token",
-                            ParseError::EmptyInput => "Empty input",
                         },
                     );
                 }

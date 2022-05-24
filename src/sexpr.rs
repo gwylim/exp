@@ -193,13 +193,19 @@ where
                                 return Err(Located::new(char_range(i), unexpected_character));
                             }
                             // This is the end of the program, return
-                            return match list.first() {
-                                None => Ok(Located::new(0..0, Sexpr::List(list))),
-                                Some(first) => Ok(Located::new(
-                                    first.source_range.start..list.last().unwrap().source_range.end,
-                                    Sexpr::List(list),
-                                )),
-                            };
+                            if list.is_empty() {
+                                return Err(Located::new(
+                                    char_range(s.len() - 1),
+                                    unexpected_character,
+                                ));
+                            }
+                            if list.len() > 1 {
+                                return Err(Located::new(
+                                    char_range(list[1].source_range.start),
+                                    unexpected_character,
+                                ));
+                            }
+                            return Ok(list.into_iter().next().unwrap());
                         }
                         Some(StackEntry {
                             start: _,
@@ -225,7 +231,7 @@ where
             }
         }
     }
-    Err(Located::new(s.len() - 1..s.len(), unexpected_character))
+    Err(Located::new(char_range(s.len() - 1), unexpected_character))
 }
 
 #[cfg(test)]
@@ -255,10 +261,7 @@ mod test {
 
     #[test]
     fn atom() {
-        assert_eq!(
-            parse_simple("x").unwrap(),
-            new_list(vec![new_atom("x", 0..1)], 0..1)
-        );
+        assert_eq!(parse_simple("x").unwrap(), new_atom("x", 0..1));
     }
 
     #[test]
@@ -266,14 +269,11 @@ mod test {
         assert_eq!(
             parse_simple("(x y z)").unwrap(),
             new_list(
-                vec![new_list(
-                    vec![
-                        new_atom("x", 1..2),
-                        new_atom("y", 3..4),
-                        new_atom("z", 5..6)
-                    ],
-                    0..7
-                )],
+                vec![
+                    new_atom("x", 1..2),
+                    new_atom("y", 3..4),
+                    new_atom("z", 5..6)
+                ],
                 0..7
             )
         );
@@ -281,45 +281,39 @@ mod test {
 
     #[test]
     fn leading_whitespace() {
-        assert_eq!(
-            parse_simple(" \n x").unwrap(),
-            new_list(vec![new_atom("x", 3..4)], 3..4)
-        );
+        assert_eq!(parse_simple(" \n x").unwrap(), new_atom("x", 3..4));
     }
 
     #[test]
     fn trailing_whitespace() {
-        assert_eq!(
-            parse_simple("x \n ").unwrap(),
-            new_list(vec![new_atom("x", 0..1)], 0..1)
-        );
+        assert_eq!(parse_simple("x \n ").unwrap(), new_atom("x", 0..1));
     }
 
     #[test]
     fn semicolon() {
         assert_eq!(
-            parse_simple("a; b; (c; d)").unwrap(),
+            parse_simple("; a; b; (c; d)").unwrap(),
             new_list(
                 vec![
-                    new_atom("a", 0..1),
+                    new_atom("a", 2..3),
                     new_list(
                         vec![
-                            new_atom("b", 3..4),
+                            new_atom("b", 5..6),
                             new_list(
                                 vec![new_list(
                                     vec![
-                                        new_atom("c", 7..8),
-                                        new_list(vec![new_atom("d", 10..11)], 8..11)
+                                        new_atom("c", 9..10),
+                                        new_list(vec![new_atom("d", 12..13)], 10..13)
                                     ],
-                                    6..12
+                                    8..14
                                 )],
-                                4..12
+                                6..14
                             )
                         ],
-                        1..12
+                        3..14
                     )
                 ],
-                0..12
+                0..14
             )
         )
     }
@@ -328,7 +322,7 @@ mod test {
     fn quotation() {
         assert_eq!(
             parse_simple("[abc \\\\ \\] def]").unwrap(),
-            new_list(vec![new_atom("abc \\ ] def", 0..15)], 0..15)
+            new_atom("abc \\ ] def", 0..15)
         );
     }
 }

@@ -83,7 +83,7 @@ fn format_sexpr_multiline<W: Write>(
     indentation: usize,
     write: &mut W,
 ) -> fmt::Result {
-    let mut is_last = false;
+    let mut is_last = is_root;
     let mut should_close = false;
     loop {
         match sexpr {
@@ -104,12 +104,12 @@ fn format_sexpr_multiline<W: Write>(
                 }
                 Some((last, init)) => {
                     let mut output = String::new();
-                    let mut current_length = 0;
+                    let mut current_length;
                     if is_last {
                         new_line(indentation, write)?;
                         output.write_str("; ")?;
                         current_length = indentation + 2;
-                    } else if !is_root {
+                    } else {
                         output.write_str("(")?;
                         new_line(indentation + 2, &mut output)?;
                         should_close = true;
