@@ -1,6 +1,6 @@
 use crate::builtin::invoke_builtin;
 use crate::eq::eq;
-use crate::program::{Declaration, Expr, PatternExpr};
+use crate::expr::{Declaration, Expr, PatternExpr};
 use crate::value::{RunResult, RuntimeError, Value, VecType};
 use std::cell::RefCell;
 use std::collections::vec_deque::VecDeque;
@@ -335,7 +335,7 @@ pub fn run(expr: &Expr) -> RunResult {
 
 #[cfg(test)]
 mod test {
-    use crate::program::compile;
+    use crate::expr::compile;
     use crate::run;
     use crate::value::{RuntimeError, Value};
 

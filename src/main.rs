@@ -1,16 +1,16 @@
 mod builtin;
 mod eq;
+mod expr;
 mod format;
 mod interpreter;
 mod located;
-mod program;
 mod sexpr;
 mod token;
 mod value;
 
+use crate::expr::{compile, ParseError};
 use crate::format::format;
 use crate::interpreter::run;
-use crate::program::{compile, ParseError};
 use crate::sexpr::parse;
 use crate::token::InvalidTokenError;
 use clap::{Parser, Subcommand};

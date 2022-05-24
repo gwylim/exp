@@ -1,6 +1,6 @@
 use crate::builtin::Builtin;
 use crate::eq::eq;
-use crate::program::Expr;
+use crate::expr::Expr;
 use regex::Regex;
 use std::borrow::Cow;
 use std::fmt;
