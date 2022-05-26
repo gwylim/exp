@@ -1,6 +1,4 @@
-; [!Source: https://projecteuler.net/problem=2]
-; let $even (fn $x; eq 0; mod x 2)
-; loop ($a 1) ($b 1) ($r 0)
-; if (leq 4000000 b) r
-; next b (add a b)
-; add (if (even b) b 0) r
+[! Source: https://projecteuler.net/problem=2 ]
+let $even (fn $x; eq 0; mod x 2)
+loop (var $a 1) (var $b 1) (var $r 0)
+if (leq 4000000 b) r (next b (add a b); add (if (even b) b 0) r)

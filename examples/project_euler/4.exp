@@ -1,19 +1,17 @@
-; [!Source: https://projecteuler.net/problem=4]
-; data ($some _) $none
-; let $reverse (
-    fn $s
-  ; loop ($from s) ($to ")
-  ; if (eq 0; string_length from) to
-  ; next (substring from 1; string_length from)
-  ; concat_string (substring from 0 1) to
-  )
-; let $palindrome (fn $n; let $s (number_to_string n); eq s; reverse s)
-; let $result (
-    loop ($i 100) ($j 100) ($ans none)
-  ; if (leq (add j 1) i) (if (leq 1000 j) ans; next 100 (add j 1) ans)
-  ; next (add i 1) j
-  ; let $n (mul i j)
-  ; let $greater (match ans (some $a) (leq a n) none true)
-  ; if greater (if (palindrome n) (some n) ans) ans
-  )
-; match result (some $x) x
+[! Source: https://projecteuler.net/problem=4 ]
+data ($some _) $none
+let $reverse
+  fn $s
+  loop (var $from s) (var $to ")
+  if (eq 0; string_length from) to
+  next (substring from 1; string_length from)
+  concat_string (substring from 0 1) to
+let $palindrome (fn $n; let $s (number_to_string n); eq s; reverse s)
+let $result
+  loop (var $i 100) (var $j 100) (var $ans none)
+  if (leq (add j 1) i) (if (leq 1000 j) ans; next 100 (add j 1) ans)
+  next (add i 1) j
+  let $n (mul i j)
+  let $greater (match ans (case none true); case (some $a); leq a n)
+  if greater (if (palindrome n) (some n) ans) ans
+match result (case (some $x) x)

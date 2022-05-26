@@ -359,14 +359,14 @@ mod test {
 
     #[test]
     fn variable_binding() {
-        eval(&"; let $x 1 (let $y 2 x)", |val| {
+        eval(&"let $x 1 (let $y 2 x)", |val| {
             assert_eq!(val, &Value::Number(1.0))
         })
     }
 
     #[test]
     fn function_definition() {
-        eval(&"; let $f (fn $x; add x x); f 1", |val| {
+        eval(&"let $f (fn $x; add x x); f 1", |val| {
             assert_eq!(val, &Value::Number(2.0))
         })
     }
@@ -374,14 +374,14 @@ mod test {
     #[test]
     fn applied_non_function() {
         assert_eq!(
-            eval_error(&"; let $x 1; x 1"),
+            eval_error(&"let $x 1; x 1"),
             RuntimeError::AppliedNonFunction
         );
     }
 
     #[test]
     fn if_statement() {
-        eval(&"; if (eq 0 1) 1; if (eq 0 0) 2 3", |val| {
+        eval(&"if (eq 0 1) 1; if (eq 0 0) 2 3", |val| {
             assert_eq!(val, &Value::Number(2.0))
         })
     }
@@ -389,7 +389,7 @@ mod test {
     #[test]
     fn match_type_error() {
         assert_eq!(
-            eval_error(&"; match (# 1 [\"a string]) (# 1 $s) s (# 2 0) 0"),
+            eval_error(&"match (# 1 [\"a string]) (case (# 1 $s) s) (case (# 2 0) 0)"),
             RuntimeError::TypeError
         );
     }
@@ -397,7 +397,7 @@ mod test {
     #[test]
     fn recursion() {
         eval(
-            &"; let $fac (fn $n; if (eq n 0) 1; mul n; fac; sub n 1); fac 7",
+            &"let $fac (fn $n; if (eq n 0) 1; mul n; fac; sub n 1); fac 7",
             |val| assert_eq!(val, &Value::Number(5040.0)),
         )
     }
@@ -405,7 +405,7 @@ mod test {
     #[test]
     fn closure() {
         eval(
-            &"; let $create_closure (fn $x; fn $y; add x y); let $f (create_closure 2); f 3",
+            &"let $create_closure (fn $x; fn $y; add x y); let $f (create_closure 2); f 3",
             |val| assert_eq!(val, &Value::Number(5.0)),
         )
     }
@@ -413,7 +413,7 @@ mod test {
     #[test]
     fn match_constructor() {
         eval(
-            &"; data ($a _ _) ($b _ _); let $x (a 1 2); match x (a $y $z) z (b _ _) 3",
+            &"data ($a _ _) ($b _ _); let $x (a 1 2); match x (case (a $y $z) z) (case (b _ _) 3)",
             |val| assert_eq!(val, &Value::Number(2.0)),
         )
     }
@@ -421,7 +421,9 @@ mod test {
     #[test]
     fn match_different_type_constructor() {
         assert_eq!(
-            eval_error(&"; data ($a _); let $x (a 1); data ($b _); match x (a $x) x (b $x) x"),
+            eval_error(
+                &"data ($a _); let $x (a 1); data ($b _); match x (case (a $x) x) (case (b $x) x)"
+            ),
             RuntimeError::TypeError
         );
     }
@@ -429,24 +431,20 @@ mod test {
     #[test]
     fn recursive_construction_and_match() {
         eval(
-            &"
-          ; data ($cons _ _) $nil
-          ; let $list (
-              fn $vec
-            ; let $build (
-                fn $result $i
-              ; if (eq i 0) result
-              ; build (cons (get vec; sub i 1) result) (sub i 1)
-              )
-            ; build nil (length vec)
-            )
-          ; let $sum (
-              fn $list
-            ; match list
-                (cons $x $xs) (add x; sum xs)
-                nil 0
-            )
-          ; sum (list (@ 1 2 3 4 5))
+            &"data ($cons _ _) $nil\n\
+                 let $list\n  \
+                   fn $vec\n  \
+                   let $build\n    \
+                     fn $result $i\n    \
+                     if (eq i 0) result\n    \
+                     build (cons (get vec; sub i 1) result) (sub i 1)\n  \
+                   build nil (length vec)\n\
+                 let $sum\n  \
+                   fn $list\n  \
+                   match list\n    \
+                     case nil 0\n  \
+                   , case (cons $x $xs) (add x; sum xs)\n\
+                 sum (list (@ 1 2 3 4 5))
         ",
             |val| assert_eq!(val, &Value::Number(15.0)),
         )
@@ -455,7 +453,7 @@ mod test {
     #[test]
     fn comparison_type_error() {
         assert_eq!(
-            eval_error(&"; data ($a _ _); if (eq (a 1 2) (a 2 [\"string])) true false"),
+            eval_error(&"data ($a _ _); if (eq (a 1 2) (a 2 [\"string])) true false"),
             RuntimeError::TypeError
         );
     }
@@ -463,7 +461,7 @@ mod test {
     #[test]
     fn constructor_incorrect_argument_count() {
         assert_eq!(
-            eval_error(&"; data ($a _ _); a 0"),
+            eval_error(&"data ($a _ _); a 0"),
             RuntimeError::InvalidNumberOfArguments {
                 expected: 2,
                 received: 1
@@ -474,7 +472,7 @@ mod test {
     #[test]
     fn no_patterns_matched() {
         assert_eq!(
-            eval_error(&"; data ($a _) ($b _); let $x (a 1); match x (b $x) x"),
+            eval_error(&"data ($a _) ($b _); let $x (a 1); match x (case (b $x) x)"),
             RuntimeError::NoPatternsMatched
         );
     }
@@ -482,7 +480,7 @@ mod test {
     #[test]
     fn multiple_patterns_matched() {
         assert_eq!(
-            eval_error(&"; data ($a _) ($b _); let $x (a 1); match x $x x (a $x) x"),
+            eval_error(&"data ($a _) ($b _); let $x (a 1); match x (case $x x) (case (a $x) x)"),
             RuntimeError::MultiplePatternsMatched
         );
     }
@@ -490,7 +488,7 @@ mod test {
     #[test]
     fn invalid_match_pattern() {
         assert_eq!(
-            eval_error(&"; data ($a _ _); match (a 1 1) (a $x) x"),
+            eval_error(&"data ($a _ _); match (a 1 1) (case (a $x) x)"),
             RuntimeError::InvalidConstructorPattern
         );
     }
@@ -499,10 +497,10 @@ mod test {
     fn looping() {
         // Sum of first n triangular numbers: (n-2)(n-1)n / 6 = 8 * 9 * 10 / 6 = 120
         eval(
-            &"; loop ($i 0) ($j 0) ($r 0)
-                  ; if (leq 10 j) r
-                  ; if (leq j i) (next 0 (add j 1) r)
-                  ; next (add i 1) j (add r i)",
+            &"loop (var $i 0) (var $j 0) (var $r 0)\n\
+                 if (leq 10 j) r\n\
+                 if (leq j i) (next 0 (add j 1) r)\n\
+                 next (add i 1) j (add r i)",
             |val| assert_eq!(val, &Value::Number(120.0)),
         )
     }

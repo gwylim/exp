@@ -1,18 +1,18 @@
-; [!Source: https://projecteuler.net/problem=3]
-; let $divides (fn $a $b; eq 0; mod b a)
-; [!Iteratively finds factors of n and divides it by them. When the remainder is equal to 1, we've
-    found the largest prime factor.
+[! Source: https://projecteuler.net/problem=3 ]
+let $divides (fn $a $b; eq 0; mod b a)
+[! Iteratively finds factors of n and divides it by them. When the
+   remainder is equal to 1, we've found the largest prime factor.
+]
+loop (var $n 600851475143) (var $i 3)
+if (eq n 1) i
+if
+  [! Knowing that i divides n is enough to know that i is prime, since
+     if it were not, we would already have divided out its factors.
   ]
-; loop ($n 600851475143) ($i 3)
-; if (eq n 1) i
-; if (
-    [!Knowing that i divides n is enough to know that i is prime, since if it were not, we would
-      already have divided out its factors.
-    ]
-  ; divides i n
-  ) (
-    next (div n i) i
-  )
-; next n
-; [!We can apply a small optimization by starting at 3 and adding 2 in the loop.]
-; add i 2
+  divides i n
+, next (div n i) i
+next n
+[! We can apply a small optimization by starting at 3 and adding 2 in
+   the loop.
+]
+add i 2

@@ -3,16 +3,15 @@ mod eq;
 mod expr;
 mod format;
 mod interpreter;
-mod located;
-mod sexpr;
 mod token;
 mod value;
 
+mod located;
+mod phrase;
+
 use crate::expr::{compile, ParseError};
-use crate::format::format;
 use crate::interpreter::run;
-use crate::sexpr::parse;
-use crate::token::InvalidTokenError;
+use crate::phrase::Phrase;
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::ops::Range;
@@ -118,7 +117,7 @@ fn main() {
         Command::Format { file } => {
             let input = fs::read_to_string(file.clone()).expect("Failed to read file");
             let mut output = String::new();
-            format(&input, &mut output).expect("Invalid file");
+            format::format(&input, &mut output).expect("Invalid file");
             fs::write(file, output).expect("Failed to write file");
         }
     }

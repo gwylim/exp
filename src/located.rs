@@ -21,4 +21,15 @@ impl<T> Located<T> {
             value,
         }
     }
+
+    pub fn map<U, E, F>(self, f: F) -> Result<Located<U>, E>
+    where
+        F: Fn(T) -> Result<U, E>,
+    {
+        let value = f(self.value)?;
+        Ok(Located {
+            source_range: self.source_range,
+            value,
+        })
+    }
 }
