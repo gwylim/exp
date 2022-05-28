@@ -19,29 +19,32 @@ pub enum Value<'a> {
     String(String),
     Boolean(bool),
     Unit,
-    Builtin(Builtin),
     Vec {
         values: Vec<Rc<Value<'a>>>,
         vec_type: VecType,
     },
-    Closure {
+    // Partial application
+    Apply {
+        function: Function<'a>,
         arity: usize,
-        body: &'a Expr,
-        env: Vec<Rc<Value<'a>>>,
+        arguments: Vec<Rc<Value<'a>>>,
     },
     // This is used for a recursive reference to a closure
     Recurse,
+    Next(Vec<Rc<Value<'a>>>),
+}
+
+#[derive(Debug, Clone)]
+pub enum Function<'a> {
+    Closure {
+        body: &'a Expr,
+        env: Vec<Rc<Value<'a>>>,
+    },
+    Builtin(Builtin),
     Constructor {
         type_id: u64,
         index: usize,
-        arity: usize,
     },
-    Constructed {
-        type_id: u64,
-        index: usize,
-        values: Vec<Rc<Value<'a>>>,
-    },
-    Next(Vec<Rc<Value<'a>>>),
 }
 
 impl<'a> PartialEq for Value<'a> {
@@ -61,7 +64,6 @@ impl<'a> Display for Value<'a> {
             Value::String(s) => write!(f, "[\"{}]", escape_string(s)),
             Value::Boolean(b) => b.fmt(f),
             Value::Unit => f.write_str("unit"),
-            Value::Builtin(_b) => write!(f, "<builtin function>"),
             Value::Vec {
                 values: vec,
                 vec_type,
@@ -82,28 +84,23 @@ impl<'a> Display for Value<'a> {
                 }
                 write!(f, ")")
             }
-            Value::Closure { .. } => write!(f, "<closure>"),
             Value::Recurse => write!(f, "<recurse>"),
-            Value::Constructor {
-                type_id,
-                index,
-                arity: _,
-            } => write!(f, "<constructor {} {}>", type_id, index),
-            Value::Constructed {
-                type_id,
-                index,
-                values,
-            } => {
-                if values.is_empty() {
-                    return write!(f, "<constructed {} {}>", type_id, index);
+            Value::Apply {
+                function: Function::Constructor { type_id, index },
+                arity,
+                arguments,
+            } if *arity == arguments.len() => {
+                if arguments.is_empty() {
+                    return write!(f, "<constructor {} {}>", type_id, index);
                 }
-                write!(f, "(<constructed {} {}>", type_id, index)?;
-                for v in values {
+                write!(f, "(<constructor {} {}>", type_id, index)?;
+                for v in arguments {
                     write!(f, " ")?;
                     v.fmt(f)?;
                 }
                 write!(f, ")")
             }
+            Value::Apply { .. } => write!(f, "<closure>"),
             Value::Next(arguments) => {
                 f.write_str("(<next>")?;
                 for arg in arguments {
@@ -120,7 +117,6 @@ pub enum RuntimeError {
     InvalidConstructorPattern,
     MultiplePatternsMatched,
     NoPatternsMatched,
-    InvalidNumberOfArguments { expected: usize, received: usize },
     AppliedNonFunction,
     TypeError,
 }

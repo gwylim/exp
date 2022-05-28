@@ -1,4 +1,4 @@
-use crate::value::{RuntimeError, Value, VecType};
+use crate::value::{Function, RuntimeError, Value, VecType};
 use std::iter::zip;
 
 pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
@@ -57,17 +57,24 @@ pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
                 Err(RuntimeError::TypeError)
             }
         }
-        Value::Constructed {
-            type_id,
-            index,
-            values,
-        } => {
-            if let Value::Constructed {
-                type_id: type_id1,
-                index: index1,
-                values: values1,
+        Value::Apply {
+            function: Function::Constructor { type_id, index },
+            arity,
+            arguments,
+        } if *arity == arguments.len() => {
+            if let Value::Apply {
+                function:
+                    Function::Constructor {
+                        type_id: type_id1,
+                        index: index1,
+                    },
+                arity: arity1,
+                arguments: arguments1,
             } = y
             {
+                if *arity1 != arguments1.len() {
+                    return Err(RuntimeError::TypeError);
+                }
                 if type_id != type_id1 {
                     return Err(RuntimeError::TypeError);
                 }
@@ -75,7 +82,7 @@ pub fn eq<'a>(x: &Value<'a>, y: &Value<'a>) -> Result<bool, RuntimeError> {
                     return Ok(false);
                 }
                 let mut matched = true;
-                for (v, v1) in zip(values, values1) {
+                for (v, v1) in zip(arguments, arguments1) {
                     if !eq(v, v1)? {
                         matched = false;
                     }

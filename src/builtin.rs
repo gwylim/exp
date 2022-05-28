@@ -66,7 +66,7 @@ pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) ->
         Builtin::Mod => invoke_binary(mod_function, argument_values),
         Builtin::Substring => invoke_ternary(substring, argument_values),
         Builtin::ConcatString => invoke_binary(concat_string, argument_values),
-        Builtin::GetLine => invoke_nullary(get_line, argument_values),
+        Builtin::GetLine => invoke_unary(get_line, argument_values),
         Builtin::StringLength => invoke_unary(string_length, argument_values),
         Builtin::Eq => invoke_binary(eq, argument_values),
         Builtin::NumberToString => invoke_unary(number_to_string, argument_values),
@@ -77,6 +77,30 @@ pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) ->
     }
 }
 
+pub fn arity(builtin: Builtin) -> usize {
+    match builtin {
+        Builtin::Print => 1,
+        Builtin::GetLine => 1,
+        Builtin::Length => 1,
+        Builtin::Get => 2,
+        Builtin::Concat => 2,
+        Builtin::Add => 2,
+        Builtin::Sub => 2,
+        Builtin::Mul => 2,
+        Builtin::Div => 2,
+        Builtin::Mod => 2,
+        Builtin::StringLength => 1,
+        Builtin::Substring => 3,
+        Builtin::ConcatString => 2,
+        Builtin::Eq => 2,
+        Builtin::NumberToString => 1,
+        Builtin::Leq => 2,
+        Builtin::And => 2,
+        Builtin::Or => 2,
+        Builtin::Not => 2,
+    }
+}
+
 trait ArgType<'a> {
     fn from_value<'b>(value: &'b Value<'a>) -> Result<&'b Self, RuntimeError>;
 }
@@ -84,6 +108,15 @@ trait ArgType<'a> {
 impl<'a> ArgType<'a> for Value<'a> {
     fn from_value<'b>(value: &'b Value<'a>) -> Result<&'b Self, RuntimeError> {
         Ok(value)
+    }
+}
+
+impl<'a> ArgType<'a> for () {
+    fn from_value<'b>(value: &'b Value<'a>) -> Result<&'b Self, RuntimeError> {
+        match value {
+            Value::Unit => Ok(&()),
+            _ => Err(RuntimeError::TypeError),
+        }
     }
 }
 
@@ -165,20 +198,6 @@ impl<'a> ResultType<'a> for bool {
     }
 }
 
-fn invoke_nullary<'a, R, F>(f: F, args: VecDeque<Rc<Value<'a>>>) -> RunResult<'a>
-where
-    R: ResultType<'a>,
-    F: Fn() -> R,
-{
-    if args.len() != 0 {
-        return Err(RuntimeError::InvalidNumberOfArguments {
-            expected: 0,
-            received: args.len(),
-        });
-    }
-    f().to_result()
-}
-
 fn invoke_unary<'a, A: 'a, R, F>(f: F, args: VecDeque<Rc<Value<'a>>>) -> RunResult<'a>
 where
     A: ArgType<'a>,
@@ -186,10 +205,7 @@ where
     F: Fn(&A) -> R,
 {
     if args.len() != 1 {
-        return Err(RuntimeError::InvalidNumberOfArguments {
-            expected: 1,
-            received: args.len(),
-        });
+        panic!("Invalid number of arguments");
     }
     let arg1 = args.into_iter().next().unwrap();
     f(A::from_value(arg1.as_ref())?).to_result()
@@ -203,10 +219,7 @@ where
     F: Fn(&A, &B) -> R,
 {
     if args.len() != 2 {
-        return Err(RuntimeError::InvalidNumberOfArguments {
-            expected: 2,
-            received: args.len(),
-        });
+        panic!("Invalid number of arguments");
     }
     let mut iter = args.into_iter();
     f(
@@ -228,10 +241,7 @@ where
     F: Fn(&A, &B, &C) -> R,
 {
     if args.len() != 3 {
-        return Err(RuntimeError::InvalidNumberOfArguments {
-            expected: 3,
-            received: args.len(),
-        });
+        panic!("Invalid number of arguments");
     }
     let mut iter = args.into_iter();
     f(
@@ -304,7 +314,7 @@ fn concat_string<'a>(s1: &String, s2: &String) -> String {
     s1.to_string() + s2
 }
 
-fn get_line<'a>() -> String {
+fn get_line<'a>(&(): &()) -> String {
     let mut buffer = String::new();
     io::stdin().read_line(&mut buffer).unwrap();
     buffer

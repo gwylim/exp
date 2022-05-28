@@ -581,7 +581,7 @@ fn compile_phrase<'a>(
                 };
             }
             Token::Keyword(Keyword::Function) => {
-                if rest.len() < 1 {
+                if rest.len() < 2 {
                     return Err(head.with_value(ParseError::InvalidSyntax));
                 }
                 let (body, args) = rest.split_last().unwrap();

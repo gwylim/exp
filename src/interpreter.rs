@@ -1,7 +1,8 @@
+use crate::builtin;
 use crate::builtin::invoke_builtin;
 use crate::eq::eq;
 use crate::expr::{Declaration, Expr, PatternExpr};
-use crate::value::{RunResult, RuntimeError, Value, VecType};
+use crate::value::{Function, RunResult, RuntimeError, Value, VecType};
 use std::cell::RefCell;
 use std::collections::vec_deque::VecDeque;
 use std::iter::zip;
@@ -13,37 +14,60 @@ fn apply<'a>(
     argument_values: VecDeque<Rc<Value<'a>>>,
 ) -> RunResult<'a> {
     match &*function_value {
-        Value::Closure { arity, body, env } => {
-            if *arity != argument_values.len() {
-                return Err(RuntimeError::InvalidNumberOfArguments {
-                    expected: *arity,
-                    received: argument_values.len(),
-                });
-            }
-            let mut stack = argument_values;
-            stack.extend(env.iter().map(|v| match **v {
-                Value::Recurse => Rc::new((*function_value).clone()),
-                _ => v.clone(),
-            }));
-            run_inner(label, body, &mut stack)
-        }
-        Value::Builtin(b) => invoke_builtin(*b, argument_values),
-        Value::Constructor {
-            type_id,
-            index,
+        Value::Apply {
+            function,
             arity,
+            arguments,
         } => {
-            if *arity != argument_values.len() {
-                return Err(RuntimeError::InvalidNumberOfArguments {
-                    expected: *arity,
-                    received: argument_values.len(),
-                });
+            let argument_count = arguments.len() + argument_values.len();
+            if *arity > argument_count {
+                // Partial application
+                return Ok(Rc::new(Value::Apply {
+                    arity: *arity,
+                    function: function.clone(),
+                    arguments: arguments
+                        .clone()
+                        .into_iter()
+                        .chain(argument_values)
+                        .collect(),
+                }));
             }
-            Ok(Rc::new(Value::Constructed {
-                type_id: *type_id,
-                index: *index,
-                values: argument_values.into_iter().collect(),
-            }))
+            let mut arguments_to_function: VecDeque<Rc<Value<'a>>> =
+                arguments.clone().into_iter().collect();
+            let mut remaining_arguments: VecDeque<Rc<Value<'a>>> = VecDeque::new();
+            for arg in argument_values {
+                if *arity > arguments_to_function.len() {
+                    arguments_to_function.push_back(arg);
+                } else {
+                    remaining_arguments.push_back(arg);
+                }
+            }
+            let result = match function {
+                Function::Closure { body, env } => {
+                    arguments_to_function.extend(env.iter().map(|v| match **v {
+                        Value::Recurse => Rc::new((*function_value).clone()),
+                        _ => v.clone(),
+                    }));
+                    run_inner(label, body, &mut arguments_to_function)
+                }
+                Function::Builtin(b) => invoke_builtin(*b, arguments_to_function),
+                Function::Constructor { .. } => {
+                    if !remaining_arguments.is_empty() {
+                        return Err(RuntimeError::AppliedNonFunction);
+                    }
+                    Ok(Rc::new(Value::Apply {
+                        function: function.clone(),
+                        arity: *arity,
+                        // TODO: we shouldn't create a new Vec here
+                        arguments: arguments_to_function.into_iter().collect(),
+                    }))
+                }
+            }?;
+            if remaining_arguments.is_empty() {
+                Ok(result)
+            } else {
+                apply(label, result, remaining_arguments)
+            }
         }
         _ => Err(RuntimeError::AppliedNonFunction),
     }
@@ -55,10 +79,13 @@ fn create_closure<'a>(
     parent_env: &VecDeque<Rc<Value<'a>>>,
     env_map: &[usize],
 ) -> Value<'a> {
-    Value::Closure {
+    Value::Apply {
         arity,
-        body,
-        env: env_map.iter().map(|&i| parent_env[i].clone()).collect(),
+        arguments: Vec::new(),
+        function: Function::Closure {
+            body,
+            env: env_map.iter().map(|&i| parent_env[i].clone()).collect(),
+        },
     }
 }
 
@@ -108,19 +135,26 @@ fn match_pattern<'a>(
             arguments,
         } => {
             let constructor_value = &stack[*constructor];
-            if let Value::Constructor {
-                type_id,
-                index,
+            if let Value::Apply {
+                function: Function::Constructor { type_id, index },
                 arity,
+                arguments: pattern_constructor_arguments,
             } = &**constructor_value
             {
+                if !pattern_constructor_arguments.is_empty() {
+                    return Err(RuntimeError::InvalidConstructorPattern);
+                }
                 if *arity != arguments.len() {
                     return Err(RuntimeError::InvalidConstructorPattern);
                 }
-                if let Value::Constructed {
-                    type_id: type_id1,
-                    index: index1,
-                    values,
+                if let Value::Apply {
+                    function:
+                        Function::Constructor {
+                            type_id: type_id1,
+                            index: index1,
+                        },
+                    arity: _,
+                    arguments: values,
                 } = &**value
                 {
                     if type_id != type_id1 {
@@ -202,7 +236,11 @@ fn run_inner<'a>(
         &Expr::NumericConstant(x) => Ok(Rc::new(Value::Number(x))),
         Expr::StringConstant(s) => Ok(Rc::new(Value::String(s.to_string()))),
         Expr::BooleanConstant(b) => Ok(Rc::new(Value::Boolean(*b))),
-        Expr::Builtin(b) => Ok(Rc::new(Value::Builtin(*b))),
+        Expr::Builtin(b) => Ok(Rc::new(Value::Apply {
+            arity: builtin::arity(*b),
+            arguments: Vec::new(),
+            function: Function::Builtin(*b),
+        })),
         Expr::Unit => Ok(Rc::new(Value::Unit)),
         Expr::Declarations { decls, body } => {
             let mut var_count = 0;
@@ -217,19 +255,10 @@ fn run_inner<'a>(
                         // TODO: It might make more sense to assign this id when compiling rather than here
                         let type_id = create_id(unique_id);
                         for (index, arity) in constructors.iter().enumerate() {
-                            stack.push_front(Rc::new(if *arity > 0 {
-                                Value::Constructor {
-                                    type_id,
-                                    index,
-                                    arity: *arity,
-                                }
-                            } else {
-                                // arity-0 constructors are not invoked
-                                Value::Constructed {
-                                    type_id,
-                                    index,
-                                    values: Vec::new(),
-                                }
+                            stack.push_front(Rc::new(Value::Apply {
+                                arity: *arity,
+                                arguments: Vec::new(),
+                                function: Function::Constructor { type_id, index },
                             }));
                         }
                         var_count += constructors.len();
@@ -461,11 +490,8 @@ mod test {
     #[test]
     fn constructor_incorrect_argument_count() {
         assert_eq!(
-            eval_error(&"data ($a _ _); a 0"),
-            RuntimeError::InvalidNumberOfArguments {
-                expected: 2,
-                received: 1
-            }
+            eval_error(&"data ($a _ _); a 0 1 2"),
+            RuntimeError::AppliedNonFunction
         )
     }
 
@@ -503,5 +529,28 @@ mod test {
                  next (add i 1) j (add r i)",
             |val| assert_eq!(val, &Value::Number(120.0)),
         )
+    }
+
+    #[test]
+    fn partial_application() {
+        eval(
+            &"let $f (fn $x $y $z; add x (add y z)); let $g (f 1); let $h (g 2); h 3",
+            |val| assert_eq!(val, &Value::Number(6.0)),
+        )
+    }
+
+    #[test]
+    fn constructor_partial_application() {
+        eval(
+            &"data ($tuple _ _); let $x (tuple 1); let $y (x 2); let $z (x 3); eq y z",
+            |val| assert_eq!(val, &Value::Boolean(false)),
+        )
+    }
+
+    #[test]
+    fn builtin_partial_application() {
+        eval(&"let $add1 (add 1); add1 2", |val| {
+            assert_eq!(val, &Value::Number(3.0))
+        })
     }
 }
