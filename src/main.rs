@@ -48,7 +48,7 @@ fn print_file_error(
     let mut line_start = 0;
     let line_end = loop {
         let line_end = get_line_end(file_contents, line_start);
-        if line_end > source_range.start || line_end + 1 >= file_contents.len() {
+        if line_end + 1 > source_range.start || line_end + 1 >= file_contents.len() {
             break line_end;
         }
         line_count += 1;
