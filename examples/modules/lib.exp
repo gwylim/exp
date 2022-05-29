@@ -1,0 +1,5 @@
+import "list
+match list_impl
+case (list $cons $nil $concat $map $fold)
+let $l1 (cons 1; cons 2 nil)
+let $l2 (cons 3; cons 4 nil) (fold add 0; concat l1 l2)

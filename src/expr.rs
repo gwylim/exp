@@ -4,7 +4,10 @@ use crate::phrase::{unescape_string, Phrase};
 use crate::token::{read_token, InvalidTokenError, Keyword, Token};
 use crate::value::VecType;
 use std::collections::vec_deque::VecDeque;
+use std::fs;
 use std::iter::once;
+use std::option::Option::None;
+use std::path::Path;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -410,7 +413,7 @@ fn compile_pattern<'a>(
             }
         }
         _ => {
-            let (expr, used_vars) = compile_phrase(phrase, env)?;
+            let (expr, used_vars) = compile_phrase(phrase, env, None)?;
             let pattern = match expr {
                 Expr::NumericConstant(n) => Ok(PatternExpr::NumericConstant(n)),
                 Expr::StringConstant(s) => Ok(PatternExpr::StringConstant(s)),
@@ -446,7 +449,7 @@ fn compile_case<'a>(
             for var in defined_vars {
                 env.push_front(var);
             }
-            let (body, body_used_vars) = compile_phrase(&rest[1], env)?;
+            let (body, body_used_vars) = compile_phrase(&rest[1], env, None)?;
             for _ in 0..var_count {
                 env.pop_front();
             }
@@ -511,7 +514,7 @@ fn apply<'a>(
     let (function_expr, mut used_vars) = function;
     let mut arguments = Vec::new();
     for phrase in rest {
-        let (arg_expr, arg_used_vars) = compile_phrase(phrase, env)?;
+        let (arg_expr, arg_used_vars) = compile_phrase(phrase, env, None)?;
         used_vars = merge(&used_vars, &arg_used_vars);
         arguments.push(arg_expr);
     }
@@ -541,7 +544,7 @@ fn compile_loop_var<'a>(
             match &rest[0].value.as_atom() {
                 Some(p) => match &p.value {
                     Token::IdentifierBinding(s) => {
-                        let (value, value_used_vars) = compile_phrase(&rest[1], env)?;
+                        let (value, value_used_vars) = compile_phrase(&rest[1], env, None)?;
                         Ok((s.as_deref(), value, value_used_vars))
                     }
                     _ => return Err(rest[0].with_value(ParseError::UnexpectedToken)),
@@ -553,9 +556,11 @@ fn compile_loop_var<'a>(
     }
 }
 
-fn compile_phrase<'a>(
+fn compile_phrase<'b, 'a: 'b>(
     mut phrase: &'a Located<Phrase<Token<String>>>,
-    env: &mut VecDeque<Option<&'a str>>,
+    env: &mut VecDeque<Option<&'b str>>,
+    // FIXME: check that end is actually used if it needs to be
+    end: Option<&'a Located<Phrase<Token<String>>>>,
 ) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
     let mut decls = Vec::new();
     let mut var_count = 0;
@@ -567,7 +572,7 @@ fn compile_phrase<'a>(
             Token::Keyword(Keyword::Tuple) | Token::Keyword(Keyword::Array) => {
                 let mut values = Vec::new();
                 for phrase in rest {
-                    let (expr, new_used_vars) = compile_phrase(phrase, env)?;
+                    let (expr, new_used_vars) = compile_phrase(phrase, env, None)?;
                     values.push(expr);
                     used_vars = merge(&used_vars, &parent_used_vars(new_used_vars, var_count));
                 }
@@ -590,7 +595,7 @@ fn compile_phrase<'a>(
                     env.push_front(*v);
                 }
                 var_count += vars.len();
-                let (expr, expr_used_vars) = compile_phrase(body, env)?;
+                let (expr, expr_used_vars) = compile_phrase(body, env, None)?;
                 // Change de Bruijn indices for parent environment
                 let parent_used_vars = parent_used_vars(expr_used_vars, var_count);
                 used_vars = merge(&used_vars, &parent_used_vars);
@@ -621,7 +626,7 @@ fn compile_phrase<'a>(
                     env.push_front(v);
                 }
                 var_count += initial_vars.len();
-                let (body, body_used_vars) = compile_phrase(&rest[rest.len() - 1], env)?;
+                let (body, body_used_vars) = compile_phrase(&rest[rest.len() - 1], env, None)?;
                 used_vars = merge(&used_vars, &parent_used_vars(body_used_vars, var_count));
                 for _ in 0..initial_vars.len() {
                     env.pop_front();
@@ -636,7 +641,7 @@ fn compile_phrase<'a>(
             Token::Keyword(Keyword::Next) => {
                 let mut arguments = Vec::new();
                 for phrase in rest {
-                    let (expr, expr_used_vars) = compile_phrase(phrase, env)?;
+                    let (expr, expr_used_vars) = compile_phrase(phrase, env, None)?;
                     used_vars = merge(&used_vars, &parent_used_vars(expr_used_vars, var_count));
                     arguments.push(expr);
                 }
@@ -653,7 +658,8 @@ fn compile_phrase<'a>(
                     Token::IdentifierBinding(s) => {
                         env.push_front(s.as_deref());
                         var_count += 1;
-                        let (value_expression, value_used_vars) = compile_phrase(&rest[1], env)?;
+                        let (value_expression, value_used_vars) =
+                            compile_phrase(&rest[1], env, None)?;
                         check_recursion_guarded(&value_expression, 0)
                             .map_err(|e| Located::new(rest[0].source_range.clone(), e))?;
                         phrase = &rest[2];
@@ -676,9 +682,9 @@ fn compile_phrase<'a>(
                         ParseError::InvalidSyntax,
                     ));
                 }
-                let (condition, condition_used_vars) = compile_phrase(&rest[0], env)?;
-                let (true_branch, true_used_vars) = compile_phrase(&rest[1], env)?;
-                let (false_branch, false_used_vars) = compile_phrase(&rest[2], env)?;
+                let (condition, condition_used_vars) = compile_phrase(&rest[0], env, None)?;
+                let (true_branch, true_used_vars) = compile_phrase(&rest[1], env, None)?;
+                let (false_branch, false_used_vars) = compile_phrase(&rest[2], env, None)?;
                 used_vars = merge(
                     &used_vars,
                     &parent_used_vars(
@@ -703,7 +709,7 @@ fn compile_phrase<'a>(
                     ));
                 }
                 let (value_phrase, cases_phrases) = rest.split_first().unwrap();
-                let (value, value_used_vars) = compile_phrase(value_phrase, env)?;
+                let (value, value_used_vars) = compile_phrase(value_phrase, env, None)?;
                 let (cases, cases_used_vars) = compile_cases(cases_phrases, env)?;
                 used_vars = merge(
                     &used_vars,
@@ -729,6 +735,49 @@ fn compile_phrase<'a>(
                 var_count += constructor_count;
                 phrase = &rest.last().unwrap();
                 decls.push(Declaration::Type(constructor_var_counts));
+            }
+            Token::Keyword(Keyword::End) => {
+                if !rest.is_empty() {
+                    return Err(Located::new(
+                        phrase.source_range.clone(),
+                        ParseError::InvalidSyntax,
+                    ));
+                }
+                match end {
+                    None => {
+                        return Err(Located::new(
+                            phrase.source_range.clone(),
+                            ParseError::InvalidSyntax,
+                        ))
+                    }
+                    Some(p) => {
+                        phrase = p;
+                    }
+                }
+            }
+            Token::Keyword(Keyword::Import) => {
+                if rest.len() != 2 {
+                    return Err(Located::new(
+                        phrase.source_range.clone(),
+                        ParseError::InvalidSyntax,
+                    ));
+                }
+                let name = match rest[0].value.as_atom().map(|p| &p.value) {
+                    Some(Token::StringLiteral(name)) => name,
+                    _ => {
+                        return Err(Located::new(
+                            rest[0].source_range.clone(),
+                            ParseError::InvalidSyntax,
+                        ))
+                    }
+                };
+                let mut path = name.to_string();
+                path.push_str(".exp");
+                // TODO: determine module path in a better way
+                let s = fs::read_to_string(Path::new(&path)).expect("Failed to read file");
+                // TODO: we need to store file information in error source ranges now
+                // TODO: imported stuff should be namespaced
+                return import(&s, env, Some(&rest[1]));
             }
             v => {
                 let (expr, expr_used_vars) = apply(
@@ -942,7 +991,11 @@ fn strip_comments(
     }
 }
 
-pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
+fn import(
+    s: &str,
+    env: &mut VecDeque<Option<&str>>,
+    end: Option<&Located<Phrase<Token<String>>>>,
+) -> Result<(Expr, Vec<usize>), Located<ParseError>> {
     let phrase = Phrase::parse(s)
         .map_err(|i| Located::new(i..i + 1, ParseError::UnexpectedCharacter))?
         .map(|p| {
@@ -959,7 +1012,12 @@ pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
             })
         })?;
     let phrase_no_comments = strip_comments(phrase)?;
-    let (expr, used_vars) = compile_phrase(&phrase_no_comments, &mut VecDeque::new())?;
+    // TODO: do we really need to clone env here? Not that big of a deal
+    compile_phrase(&phrase_no_comments, &mut env.clone(), end)
+}
+
+pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
+    let (expr, used_vars) = import(s, &mut VecDeque::new(), None)?;
     if !used_vars.is_empty() {
         panic!("Vars referenced that don't exist, should be impossible");
     }

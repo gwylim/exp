@@ -1,0 +1,21 @@
+data
+  [! Defines the interface for a list implementation.
+
+     This will look better with named fields.
+  ]
+  $list ([! Cons ] _) ([! Empty list ] _) ([! Concatenate ] _)
+    [! Map ] _
+  [! Fold ] _
+let $list_impl
+  data ($cons _ _) $nil
+  let $concat
+    fn $l1 $l2
+    match l1 (case (cons $x $xs); cons x; concat xs l2) (case nil l2)
+  let $map
+    fn $f $l
+    match l (case nil nil) (case (cons $x $xs); cons (f x); map f xs)
+  let $fold
+    fn $f $s $l
+    match l (case nil s) (case (cons $x $xs); f x; fold f s xs)
+  list cons nil concat map fold
+end

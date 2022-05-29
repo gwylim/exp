@@ -23,6 +23,8 @@ pub enum Keyword {
     Next,
     Unit,
     Var,
+    End,
+    Import,
 }
 
 #[derive(Debug)]
@@ -66,6 +68,8 @@ where
                 "next" => Ok(Token::Keyword(Keyword::Next)),
                 "unit" => Ok(Token::Keyword(Keyword::Unit)),
                 "var" => Ok(Token::Keyword(Keyword::Var)),
+                "end" => Ok(Token::Keyword(Keyword::End)),
+                "import" => Ok(Token::Keyword(Keyword::Import)),
                 "#" => Ok(Token::Keyword(Keyword::Tuple)),
                 "@" => Ok(Token::Keyword(Keyword::Array)),
                 "_" => Ok(Token::IdentifierBinding(None)),

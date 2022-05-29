@@ -39,6 +39,8 @@ fn format_token<W: Write>(token: &Token<(&str, bool)>, write: &mut W) -> fmt::Re
                 Keyword::Tuple => "#",
                 Keyword::Array => "@",
                 Keyword::Var => "var",
+                Keyword::End => "end",
+                Keyword::Import => "import",
             }
         ),
         Token::NumericLiteral(x) => write!(write, "{}", x),
