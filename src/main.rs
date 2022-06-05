@@ -9,10 +9,13 @@ mod value;
 mod checks;
 mod located;
 mod phrase;
+mod typecheck;
+mod types;
 
 use crate::expr::{compile, ParseError};
 use crate::interpreter::run;
 use crate::phrase::Phrase;
+use crate::typecheck::typecheck;
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::ops::Range;
@@ -89,6 +92,7 @@ fn main() {
             let input = fs::read_to_string(file.clone()).expect("Failed to read file");
             match compile(&input) {
                 Ok(expr) => {
+                    println!("type: {:?}", typecheck(&expr).expect("Unification failed"));
                     println!("{}", run(&expr).expect("Exception in execution"));
                 }
                 Err(err) => {
