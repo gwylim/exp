@@ -77,14 +77,13 @@ fn create_closure<'a>(
     arity: usize,
     body: &'a Expr,
     parent_env: &VecDeque<Rc<Value<'a>>>,
-    env_map: &[usize],
 ) -> Value<'a> {
     Value::Apply {
         arity,
         arguments: Vec::new(),
         function: Function::Closure {
             body,
-            env: env_map.iter().map(|&i| parent_env[i].clone()).collect(),
+            env: parent_env.iter().map(|x| x.clone()).collect(),
         },
     }
 }
@@ -216,11 +215,7 @@ fn run_inner<'a>(
     stack: &mut VecDeque<Rc<Value<'a>>>,
 ) -> RunResult<'a> {
     match expr {
-        &Expr::Function {
-            arity,
-            ref body,
-            ref env_map,
-        } => Ok(Rc::new(create_closure(arity, body, stack, env_map))),
+        &Expr::Function { arity, ref body } => Ok(Rc::new(create_closure(arity, body, stack))),
         &Expr::Bound(i) => Ok(stack[i].clone()),
         Expr::Apply {
             function,
