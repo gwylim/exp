@@ -1,21 +1,7 @@
-mod builtin;
-mod eq;
-mod expr;
-mod format;
-mod interpreter;
-mod token;
-mod value;
-
-mod checks;
-mod located;
-mod phrase;
-mod typecheck;
-mod types;
-
-use crate::expr::{compile, ParseError};
-use crate::interpreter::run;
-use crate::phrase::Phrase;
-use crate::typecheck::typecheck;
+use exp::expr::{compile, ParseError};
+use exp::interpreter::run;
+use exp::typecheck::typecheck;
+use exp::format;
 use clap::{Parser, Subcommand};
 use std::fs;
 use std::ops::Range;

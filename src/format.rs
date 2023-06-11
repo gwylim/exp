@@ -1,5 +1,5 @@
-use crate::token::{InvalidTokenError, Keyword, Token};
-use crate::{token, Phrase};
+use crate::token::{self, InvalidTokenError, Keyword, Token};
+use crate::phrase::Phrase;
 use std::fmt;
 use std::fmt::Write;
 
