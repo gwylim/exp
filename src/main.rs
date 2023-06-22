@@ -6,6 +6,7 @@ mod interpreter;
 mod token;
 mod value;
 
+mod checks;
 mod located;
 mod phrase;
 

@@ -1,10 +1,10 @@
 use crate::builtin::{get_builtin, Builtin};
+use crate::checks::check_recursion_guarded;
 use crate::located::Located;
 use crate::phrase::{unescape_string, Phrase};
 use crate::token::{read_token, InvalidTokenError, Keyword, Token};
 use crate::value::VecType;
 use std::collections::vec_deque::VecDeque;
-use std::iter::once;
 
 #[derive(Debug)]
 pub enum ParseError {
@@ -60,8 +60,6 @@ pub enum Expr {
     Function {
         arity: usize,
         body: Box<Expr>,
-        // List of bound variables to copy from parent environment
-        env_map: Vec<usize>,
     },
     Bound(usize),
     Apply {
@@ -167,181 +165,6 @@ fn read_function_vars(
             )),
         })
         .collect()
-}
-
-fn var_count(pattern: &PatternExpr) -> usize {
-    match pattern {
-        PatternExpr::BindVar => 1,
-        PatternExpr::Vec {
-            values,
-            vec_type: _,
-        } => values.iter().map(|e| var_count(e)).sum(),
-        PatternExpr::NumericConstant(_) => 0,
-        PatternExpr::StringConstant(_) => 0,
-        PatternExpr::BooleanConstant(_) => 0,
-        PatternExpr::Unit => 0,
-        PatternExpr::Bound(_) => 0,
-        PatternExpr::Constructed {
-            constructor: _,
-            arguments,
-        } => arguments.iter().map(|pattern| var_count(pattern)).sum(),
-    }
-}
-
-fn check_no_recursion_in_decls(
-    decls: &Vec<Declaration>,
-    level: usize,
-) -> Result<usize, ParseError> {
-    let mut var_count = 0;
-    for decl in decls {
-        match decl {
-            Declaration::Let(value) => {
-                var_count += 1;
-                check_no_recursion(value, level + var_count)?;
-            }
-            Declaration::Type(constructors) => {
-                var_count += constructors.len();
-            }
-        }
-    }
-    Ok(var_count)
-}
-
-fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
-    match expr {
-        Expr::Function {
-            arity: _,
-            body: _,
-            env_map,
-        } => {
-            if env_map.contains(&level) {
-                return Err(ParseError::CyclicDefinition);
-            }
-        }
-        Expr::Bound(i) => {
-            if *i == level {
-                return Err(ParseError::CyclicDefinition);
-            }
-        }
-        Expr::Apply {
-            function,
-            arguments,
-        } => {
-            check_no_recursion(function, level)?;
-            for arg in arguments {
-                check_no_recursion(arg, level)?;
-            }
-        }
-        Expr::Declarations { decls, body } => {
-            let var_count = check_no_recursion_in_decls(decls, level)?;
-            check_no_recursion(body, level + var_count)?;
-        }
-        Expr::Vec {
-            values,
-            vec_type: _,
-        } => {
-            for e in values {
-                check_no_recursion(e, level)?;
-            }
-        }
-        Expr::If {
-            condition,
-            true_branch,
-            false_branch,
-        } => {
-            check_no_recursion(condition, level)?;
-            check_no_recursion(true_branch, level)?;
-            check_no_recursion(false_branch, level)?;
-        }
-        Expr::Match { value, cases } => {
-            check_no_recursion(value, level)?;
-            for (pattern, body) in cases {
-                check_no_recursion(body, level + var_count(pattern))?;
-            }
-        }
-        Expr::Loop { initial_vars, body } => {
-            for var in initial_vars {
-                check_no_recursion(var, level)?;
-            }
-            check_no_recursion(body, level + initial_vars.len())?;
-        }
-        Expr::Next(arguments) => {
-            for arg in arguments {
-                check_no_recursion(arg, level)?;
-            }
-        }
-        Expr::NumericConstant(_) => {}
-        Expr::StringConstant(_) => {}
-        Expr::BooleanConstant(_) => {}
-        Expr::Unit => {}
-        Expr::Builtin(_) => {}
-    }
-    Ok(())
-}
-
-// Checks that no references to bound variable at index 0 exist which aren't guarded by a function
-fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseError> {
-    match expr {
-        Expr::Bound(i) => {
-            if *i == level {
-                return Err(ParseError::CyclicDefinition);
-            }
-        }
-        Expr::Apply {
-            function,
-            arguments,
-        } => {
-            check_no_recursion(function, level)?;
-            for argument in arguments {
-                check_no_recursion(argument, level)?;
-            }
-        }
-        Expr::Declarations { decls, body } => {
-            let var_count = check_no_recursion_in_decls(decls, level)?;
-            check_recursion_guarded(body, level + var_count)?;
-        }
-        Expr::Vec {
-            values,
-            vec_type: _,
-        } => {
-            for expr in values {
-                check_no_recursion(expr, level)?;
-            }
-        }
-        Expr::If {
-            condition,
-            true_branch,
-            false_branch,
-        } => {
-            check_no_recursion(condition, level)?;
-            check_recursion_guarded(true_branch, level)?;
-            check_recursion_guarded(false_branch, level)?;
-        }
-        Expr::Match { value, cases } => {
-            check_no_recursion(value, level)?;
-            for (pattern, body) in cases {
-                check_recursion_guarded(body, level + var_count(pattern))?;
-            }
-        }
-        Expr::Loop { initial_vars, body } => {
-            for var in initial_vars {
-                check_no_recursion(var, level)?;
-            }
-            check_recursion_guarded(body, level + initial_vars.len())?;
-        }
-        Expr::Next(arguments) => {
-            for arg in arguments {
-                check_no_recursion(arg, level)?;
-            }
-        }
-        Expr::NumericConstant(_) => {}
-        Expr::StringConstant(_) => {}
-        Expr::BooleanConstant(_) => {}
-        Expr::Unit => {}
-        Expr::Function { .. } => {}
-        Expr::Builtin(_) => {}
-    }
-    Ok(())
 }
 
 fn compile_pattern<'a>(
@@ -601,7 +424,6 @@ fn compile_phrase<'a>(
                 break Expr::Function {
                     arity: vars.len(),
                     body: Box::new(expr),
-                    env_map: parent_used_vars,
                 };
             }
             Token::Keyword(Keyword::Loop) => {
@@ -756,165 +578,6 @@ fn compile_phrase<'a>(
     ))
 }
 
-fn rewrite_env_map_pattern(pattern_expr: PatternExpr, current_env_map: &[usize]) -> PatternExpr {
-    match pattern_expr {
-        PatternExpr::Bound(i) => {
-            PatternExpr::Bound(current_env_map.iter().position(|j| i == *j).unwrap())
-        }
-        PatternExpr::Vec { values, vec_type } => PatternExpr::Vec {
-            values: values
-                .into_iter()
-                .map(|e| rewrite_env_map_pattern(e, current_env_map))
-                .collect(),
-            vec_type,
-        },
-        PatternExpr::BindVar => pattern_expr,
-        PatternExpr::NumericConstant(_) => pattern_expr,
-        PatternExpr::StringConstant(_) => pattern_expr,
-        PatternExpr::BooleanConstant(_) => pattern_expr,
-        PatternExpr::Unit => pattern_expr,
-        PatternExpr::Constructed {
-            constructor,
-            arguments,
-        } => PatternExpr::Constructed {
-            constructor: current_env_map
-                .iter()
-                .position(|j| constructor == *j)
-                .unwrap(),
-            arguments: arguments
-                .into_iter()
-                .map(|e| rewrite_env_map_pattern(e, current_env_map))
-                .collect(),
-        },
-    }
-}
-
-/**
- * The original env maps we create are relative to all variables which are in scope. We want to
- * make them to be relative to the variables which are captured by the parent lambda only, since we
- * copy from the parent environment when creating a closure.
- *
- * We also need to rewrite bound variable indices to be relative to this new reduced environment.
- */
-fn rewrite_env_maps(expr: Expr, current_env_map: &[usize]) -> Expr {
-    match expr {
-        Expr::Function {
-            arity,
-            body,
-            env_map,
-        } => {
-            let new_env_map: Vec<usize> = env_map
-                .iter()
-                .map(|i| current_env_map.iter().position(|j| *i == *j).unwrap())
-                .collect();
-            let child_env_map: Vec<usize> = (0..arity)
-                .chain(new_env_map.iter().map(|i| arity + current_env_map[*i]))
-                .collect();
-            Expr::Function {
-                arity,
-                body: Box::new(rewrite_env_maps(*body, &child_env_map)),
-                env_map: new_env_map,
-            }
-        }
-        Expr::Bound(i) => Expr::Bound(
-            current_env_map
-                .iter()
-                .position(|j| i == *j)
-                .expect("Couldn't find bound variable"),
-        ),
-        Expr::Apply {
-            function,
-            arguments,
-        } => Expr::Apply {
-            function: Box::new(rewrite_env_maps(*function, current_env_map)),
-            arguments: arguments
-                .into_iter()
-                .map(|argument| rewrite_env_maps(argument, current_env_map))
-                .collect(),
-        },
-        Expr::Declarations { decls, body } => {
-            let mut child_env_map: Vec<usize> = current_env_map.to_vec();
-            let mut new_decls = Vec::new();
-            for decl in decls {
-                match decl {
-                    Declaration::Let(expr) => {
-                        child_env_map =
-                            once(0).chain(child_env_map.iter().map(|x| x + 1)).collect();
-                        new_decls.push(Declaration::Let(rewrite_env_maps(expr, &child_env_map)));
-                    }
-                    Declaration::Type(constructors) => {
-                        child_env_map = (0..constructors.len())
-                            .chain(child_env_map.iter().map(|i| constructors.len() + i))
-                            .collect();
-                        new_decls.push(Declaration::Type(constructors));
-                    }
-                }
-            }
-            Expr::Declarations {
-                decls: new_decls,
-                body: Box::new(rewrite_env_maps(*body, &child_env_map)),
-            }
-        }
-        Expr::Vec { values, vec_type } => Expr::Vec {
-            values: values
-                .into_iter()
-                .map(|e| rewrite_env_maps(e, current_env_map))
-                .collect(),
-            vec_type,
-        },
-        Expr::If {
-            condition,
-            true_branch,
-            false_branch,
-        } => Expr::If {
-            condition: Box::new(rewrite_env_maps(*condition, current_env_map)),
-            true_branch: Box::new(rewrite_env_maps(*true_branch, current_env_map)),
-            false_branch: Box::new(rewrite_env_maps(*false_branch, current_env_map)),
-        },
-        Expr::Match { value, cases } => Expr::Match {
-            value: Box::new(rewrite_env_maps(*value, current_env_map)),
-            cases: cases
-                .into_iter()
-                .map(|(pattern, expr)| {
-                    let var_count = var_count(&pattern);
-                    let child_env_map: Vec<usize> = (0..var_count)
-                        .chain(current_env_map.iter().map(|i| var_count + i))
-                        .collect();
-                    (
-                        rewrite_env_map_pattern(pattern, current_env_map),
-                        rewrite_env_maps(expr, &child_env_map),
-                    )
-                })
-                .collect(),
-        },
-        Expr::NumericConstant(_) => expr,
-        Expr::StringConstant(_) => expr,
-        Expr::BooleanConstant(_) => expr,
-        Expr::Unit => expr,
-        Expr::Builtin(_) => expr,
-        Expr::Loop { initial_vars, body } => {
-            let new_initial_vars: Vec<Expr> = initial_vars
-                .into_iter()
-                .map(|e| rewrite_env_maps(e, current_env_map))
-                .collect();
-            let child_env_map: Vec<usize> = (0..new_initial_vars.len())
-                .chain(current_env_map.iter().map(|i| new_initial_vars.len() + i))
-                .collect();
-            let new_body = rewrite_env_maps(*body, &child_env_map);
-            Expr::Loop {
-                initial_vars: new_initial_vars,
-                body: Box::new(new_body),
-            }
-        }
-        Expr::Next(arguments) => Expr::Next(
-            arguments
-                .into_iter()
-                .map(|e| rewrite_env_maps(e, current_env_map))
-                .collect(),
-        ),
-    }
-}
-
 fn strip_comments(
     phrase: Located<Phrase<Token<String>>>,
 ) -> Result<Located<Phrase<Token<String>>>, Located<ParseError>> {
@@ -963,5 +626,5 @@ pub fn compile(s: &str) -> Result<Expr, Located<ParseError>> {
     if !used_vars.is_empty() {
         panic!("Vars referenced that don't exist, should be impossible");
     }
-    Ok(rewrite_env_maps(expr, &[]))
+    Ok(expr)
 }
