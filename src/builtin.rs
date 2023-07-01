@@ -149,7 +149,7 @@ impl<'a> ArgType<'a> for String {
     }
 }
 
-impl<'a> ArgType<'a> for f64 {
+impl<'a> ArgType<'a> for i64 {
     fn from_value<'b>(value: &'b Value<'a>) -> Result<&'b Self, RuntimeError> {
         match &*value {
             Value::Number(x) => Ok(x),
@@ -198,7 +198,7 @@ impl<'a> ResultType<'a> for Value<'a> {
     }
 }
 
-impl<'a> ResultType<'a> for f64 {
+impl<'a> ResultType<'a> for i64 {
     fn to_result(self) -> RunResult<'a> {
         Ok(Rc::new(Value::Number(self)))
     }
@@ -276,29 +276,20 @@ where
     .to_result()
 }
 
-fn get_int(x: f64) -> i64 {
-    let result = x as i64;
-    if result as f64 != x {
-        panic!("Expecting integer");
-    }
-    result
-}
-
 fn print<'a>(s: &String) -> Value<'a> {
     println!("{}", s);
     Value::Unit
 }
 
-fn len(vec: &Vec<Rc<Value>>) -> f64 {
-    vec.len() as f64
+fn len(vec: &Vec<Rc<Value>>) -> i64 {
+    vec.len() as i64
 }
 
-fn get<'a>(vec: &Vec<Rc<Value<'a>>>, i: &f64) -> Rc<Value<'a>> {
-    let index = get_int(*i);
-    if index < 0 || index >= vec.len() as i64 {
+fn get<'a>(vec: &Vec<Rc<Value<'a>>>, i: &i64) -> Rc<Value<'a>> {
+    if *i < 0 || *i >= vec.len() as i64 {
         panic!("vector index out of range");
     }
-    vec[index as usize].clone()
+    vec[*i as usize].clone()
 }
 
 fn concat<'a>(a: &Vec<Rc<Value<'a>>>, b: &Vec<Rc<Value<'a>>>) -> Rc<Value<'a>> {
@@ -310,28 +301,28 @@ fn concat<'a>(a: &Vec<Rc<Value<'a>>>, b: &Vec<Rc<Value<'a>>>) -> Rc<Value<'a>> {
     })
 }
 
-fn add(x: &f64, y: &f64) -> f64 {
+fn add(x: &i64, y: &i64) -> i64 {
     *x + *y
 }
 
-fn sub(x: &f64, y: &f64) -> f64 {
+fn sub(x: &i64, y: &i64) -> i64 {
     *x - *y
 }
 
-fn mul(x: &f64, y: &f64) -> f64 {
+fn mul(x: &i64, y: &i64) -> i64 {
     *x * *y
 }
 
-fn div(x: &f64, y: &f64) -> f64 {
+fn div(x: &i64, y: &i64) -> i64 {
     *x / *y
 }
 
-fn mod_function(x: &f64, n: &f64) -> f64 {
+fn mod_function(x: &i64, n: &i64) -> i64 {
     *x % *n
 }
 
-fn substring<'a>(s: &String, start: &f64, end: &f64) -> String {
-    s[(get_int(*start) as usize)..(get_int(*end) as usize)].to_string()
+fn substring<'a>(s: &String, start: &i64, end: &i64) -> String {
+    s[(*start as usize)..(*end as usize)].to_string()
 }
 
 fn concat_string<'a>(s1: &String, s2: &String) -> String {
@@ -344,15 +335,15 @@ fn get_line<'a>(&(): &()) -> String {
     buffer
 }
 
-fn string_length<'a>(s: &String) -> f64 {
-    s.len() as f64
+fn string_length<'a>(s: &String) -> i64 {
+    s.len() as i64
 }
 
-fn number_to_string<'a>(x: &f64) -> String {
+fn number_to_string<'a>(x: &i64) -> String {
     x.to_string()
 }
 
-fn leq<'a>(x: &f64, y: &f64) -> bool {
+fn leq<'a>(x: &i64, y: &i64) -> bool {
     *x <= *y
 }
 
@@ -374,8 +365,8 @@ fn concat_bytes(a: &Vec<u8>, b: &Vec<u8>) -> Vec<u8> {
     values
 }
 
-fn number_to_bytes(x: &f64) -> Vec<u8> {
-    if *x >= 0.0 && *x <= 255.0 && *x == get_int(*x) as f64 {
+fn number_to_bytes(x: &i64) -> Vec<u8> {
+    if *x >= 0 && *x <= 255 {
         let mut result = Vec::new();
         result.push(*x as u8);
         return result;

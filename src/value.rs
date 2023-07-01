@@ -16,7 +16,7 @@ pub enum VecType {
 #[derive(Debug, Clone)]
 pub enum Value<'a> {
     Bytes(Vec<u8>),
-    Number(f64),
+    Number(i64),
     String(String),
     Boolean(bool),
     Unit,

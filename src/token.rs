@@ -3,7 +3,7 @@ use hex::FromHex;
 #[derive(Debug)]
 pub enum Token<S> {
     Keyword(Keyword),
-    NumericLiteral(f64),
+    NumericLiteral(i64),
     StringLiteral(S),
     BooleanLiteral(bool),
     BytesLiteral(Vec<u8>),
@@ -48,7 +48,7 @@ where
         };
     }
     if first.is_numeric() || first == '-' {
-        let result = s.parse::<f64>();
+        let result = s.parse::<i64>();
         match result {
             Ok(x) => Ok(Token::NumericLiteral(x)),
             Err(_) => Err(InvalidTokenError::InvalidNumericLiteral),

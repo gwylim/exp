@@ -36,7 +36,7 @@ pub enum PatternExpr {
         arguments: Vec<PatternExpr>,
     },
     // TODO: maybe can avoid duplicating this with Expr
-    NumericConstant(f64),
+    NumericConstant(i64),
     StringConstant(String),
     BooleanConstant(bool),
     Unit,
@@ -53,7 +53,7 @@ pub enum Declaration {
 // TODO: need source position information
 #[derive(Debug)]
 pub enum Expr {
-    NumericConstant(f64),
+    NumericConstant(i64),
     StringConstant(String),
     BooleanConstant(bool),
     BytesConstant(Vec<u8>),
