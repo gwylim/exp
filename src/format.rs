@@ -78,6 +78,13 @@ fn format_token<W: Write>(token: &Token<(&str, bool)>, write: &mut W) -> fmt::Re
                 write!(write, "!{}", s)
             }
         }
+        Token::BytesLiteral(bytes) => {
+            write!(write, "0x")?;
+            for byte in bytes {
+                write!(write, "{:02x}", byte)?;
+            }
+            Ok(())
+        }
     }
 }
 

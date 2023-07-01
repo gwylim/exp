@@ -25,6 +25,8 @@ pub enum Builtin {
     And,
     Or,
     Not,
+    ConcatBytes,
+    NumberToBytes,
 }
 
 // TODO: maybe swap this around, return a word for each Builtin?
@@ -49,6 +51,8 @@ pub fn get_builtin(s: &str) -> Option<Builtin> {
         "and" => Some(Builtin::And),
         "or" => Some(Builtin::Or),
         "not" => Some(Builtin::Not),
+        "concat_bytes" => Some(Builtin::ConcatBytes),
+        "number_to_bytes" => Some(Builtin::NumberToBytes),
         _ => None,
     }
 }
@@ -74,6 +78,8 @@ pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) ->
         Builtin::And => invoke_binary(and, argument_values),
         Builtin::Or => invoke_binary(or, argument_values),
         Builtin::Not => invoke_unary(not, argument_values),
+        Builtin::ConcatBytes => invoke_binary(concat_bytes, argument_values),
+        Builtin::NumberToBytes => invoke_unary(number_to_bytes, argument_values),
     }
 }
 
@@ -98,6 +104,8 @@ pub fn arity(builtin: Builtin) -> usize {
         Builtin::And => 2,
         Builtin::Or => 2,
         Builtin::Not => 2,
+        Builtin::ConcatBytes => 2,
+        Builtin::NumberToBytes => 1,
     }
 }
 
@@ -158,6 +166,16 @@ impl<'a> ArgType<'a> for bool {
         }
     }
 }
+
+impl<'a> ArgType<'a> for Vec<u8> {
+    fn from_value<'b>(value: &'b Value<'a>) -> Result<&'b Self, RuntimeError> {
+        match &*value {
+            Value::Bytes(bytes) => Ok(bytes),
+            _ => Err(RuntimeError::TypeError),
+        }
+    }
+}
+
 trait ResultType<'a> {
     fn to_result(self) -> RunResult<'a>;
 }
@@ -195,6 +213,12 @@ impl<'a> ResultType<'a> for String {
 impl<'a> ResultType<'a> for bool {
     fn to_result(self) -> RunResult<'a> {
         Ok(Rc::new(Value::Boolean(self)))
+    }
+}
+
+impl<'a> ResultType<'a> for Vec<u8> {
+    fn to_result(self) -> RunResult<'a> {
+        Ok(Rc::new(Value::Bytes(self)))
     }
 }
 
@@ -342,4 +366,19 @@ fn or(x: &bool, y: &bool) -> bool {
 
 fn not(x: &bool) -> bool {
     !*x
+}
+
+fn concat_bytes(a: &Vec<u8>, b: &Vec<u8>) -> Vec<u8> {
+    let mut values = a.clone();
+    values.extend(b.iter().map(|rc| *rc));
+    values
+}
+
+fn number_to_bytes(x: &f64) -> Vec<u8> {
+    if *x >= 0.0 && *x <= 255.0 && *x == get_int(*x) as f64 {
+        let mut result = Vec::new();
+        result.push(*x as u8);
+        return result;
+    }
+    panic!("Invalid byte value");
 }

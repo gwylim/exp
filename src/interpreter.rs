@@ -231,6 +231,7 @@ fn run_inner<'a>(
         &Expr::NumericConstant(x) => Ok(Rc::new(Value::Number(x))),
         Expr::StringConstant(s) => Ok(Rc::new(Value::String(s.to_string()))),
         Expr::BooleanConstant(b) => Ok(Rc::new(Value::Boolean(*b))),
+        Expr::BytesConstant(b) => Ok(Rc::new(Value::Bytes(b.clone()))),
         Expr::Builtin(b) => Ok(Rc::new(Value::Apply {
             arity: builtin::arity(*b),
             arguments: Vec::new(),

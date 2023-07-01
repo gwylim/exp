@@ -1,9 +1,12 @@
+use hex::FromHex;
+
 #[derive(Debug)]
 pub enum Token<S> {
     Keyword(Keyword),
     NumericLiteral(f64),
     StringLiteral(S),
     BooleanLiteral(bool),
+    BytesLiteral(Vec<u8>),
     Identifier(S),
     IdentifierBinding(Option<S>),
     Comment(S),
@@ -29,6 +32,7 @@ pub enum Keyword {
 pub enum InvalidTokenError {
     InvalidNumericLiteral,
     InvalidVariableName,
+    InvalidBytesLiteral,
 }
 
 pub fn read_token<'a, S, F>(s: &'a str, from_str: F) -> Result<Token<S>, InvalidTokenError>
@@ -36,6 +40,13 @@ where
     F: Fn(&'a str) -> S,
 {
     let first: char = s.chars().nth(0).unwrap();
+    if first == '0' && s.chars().nth(1) == Some('x') {
+        let result = <Vec<u8>>::from_hex(&s[2..]);
+        return match result {
+            Ok(x) => Ok(Token::BytesLiteral(x)),
+            Err(_) => Err(InvalidTokenError::InvalidBytesLiteral),
+        };
+    }
     if first.is_numeric() || first == '-' {
         let result = s.parse::<f64>();
         match result {

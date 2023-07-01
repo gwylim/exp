@@ -56,6 +56,7 @@ pub enum Expr {
     NumericConstant(f64),
     StringConstant(String),
     BooleanConstant(bool),
+    BytesConstant(Vec<u8>),
     Unit,
     Function {
         arity: usize,
@@ -105,6 +106,7 @@ fn compile_atom(
         Token::StringLiteral(s) => result(Expr::StringConstant(s.to_string())),
         Token::NumericLiteral(x) => result(Expr::NumericConstant(*x)),
         Token::BooleanLiteral(b) => result(Expr::BooleanConstant(*b)),
+        Token::BytesLiteral(b) => result(Expr::BytesConstant(b.clone())),
         Token::Identifier(s) => match lookup(s, env) {
             None => get_builtin(s)
                 .map(|b| result(Expr::Builtin(b)))

@@ -99,6 +99,7 @@ fn check_no_recursion(expr: &Expr, level: usize) -> Result<(), ParseError> {
         Expr::NumericConstant(_) => {}
         Expr::StringConstant(_) => {}
         Expr::BooleanConstant(_) => {}
+        Expr::BytesConstant(_) => {}
         Expr::Unit => {}
         Expr::Builtin(_) => {}
     }
@@ -163,6 +164,7 @@ pub fn check_recursion_guarded(expr: &Expr, level: usize) -> Result<(), ParseErr
         Expr::NumericConstant(_) => {}
         Expr::StringConstant(_) => {}
         Expr::BooleanConstant(_) => {}
+        Expr::BytesConstant(_) => {}
         Expr::Unit => {}
         Expr::Function { .. } => {}
         Expr::Builtin(_) => {}
