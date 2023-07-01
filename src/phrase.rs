@@ -19,13 +19,6 @@ pub struct Phrase<T> {
     pub rest: Vec<Located<Phrase<T>>>,
 }
 
-#[derive(Debug)]
-struct Line<'a> {
-    indentation: usize,
-    comma: bool,
-    phrase: Located<Phrase<(&'a str, bool)>>,
-}
-
 // Returns the located version of a token using the string before and after parsing it and the total
 // length of the input. Also returns the next string to use after skipping whitespace.
 fn locate<'a, T>(value: T, s: &str, rest: &'a str, length: usize) -> (Located<T>, &'a str) {
@@ -75,26 +68,11 @@ fn read_atom(s: &str, length: usize) -> Result<(Located<(&str, bool)>, &str), us
 
 fn skip_whitespace(s: &str) -> &str {
     for (i, b) in s.bytes().enumerate() {
-        if !b.is_ascii_whitespace() || b == '\n' as u8 {
+        if !b.is_ascii_whitespace() {
             return &s[i..];
         }
     }
     ""
-}
-
-fn read_indentation(s: &str) -> (usize, &str) {
-    let mut start = 0;
-    for (i, b) in s.bytes().enumerate() {
-        if b == '\n' as u8 {
-            // Skip empty lines
-            start = i + 1;
-            continue;
-        }
-        if b != ' ' as u8 {
-            return (i - start, &s[i..]);
-        }
-    }
-    (s.len() - start, "")
 }
 
 fn phrase(s: &str, length: usize) -> Result<(Located<Phrase<(&str, bool)>>, &str), usize> {
@@ -104,21 +82,9 @@ fn phrase(s: &str, length: usize) -> Result<(Located<Phrase<(&str, bool)>>, &str
             return Err(length - s1.len());
         }
         return Ok(locate(result.value, s, &s1[1..], length));
-    } else if s.as_bytes()[0] == ';' as u8 {
-        let (result, s1) = inner_phrase(skip_whitespace(&s[1..]), length)?;
-        return Ok(locate(result.value, s, s1, length));
     }
-    let (head, s1) = read_atom(s, length)?;
-    Ok((
-        Located::new(
-            head.source_range.clone(),
-            Phrase {
-                head,
-                rest: Vec::new(),
-            },
-        ),
-        s1,
-    ))
+    // TODO: do this non-recursively
+    return inner_phrase(skip_whitespace(s), length);
 }
 
 fn inner_phrase(s: &str, length: usize) -> Result<(Located<Phrase<(&str, bool)>>, &str), usize> {
@@ -139,94 +105,14 @@ fn inner_phrase(s: &str, length: usize) -> Result<(Located<Phrase<(&str, bool)>>
     ))
 }
 
-fn line_phrase(s: &str, length: usize) -> Result<Option<(Line, &str)>, usize> {
-    let (indentation, s) = read_indentation(s);
-    if s.is_empty() {
-        return Ok(None);
-    }
-    let (s, comma) = if s.as_bytes()[0] == ',' as u8 {
-        (skip_whitespace(&s[1..]), true)
-    } else {
-        (s, false)
-    };
-    let (phrase, s) = inner_phrase(s, length)?;
-    Ok(Some((
-        Line {
-            indentation,
-            comma,
-            phrase,
-        },
-        s,
-    )))
-}
-
-fn merge_lines(lines: &mut Vec<Line>, min_indentation: usize) {
-    let mut siblings: Option<(usize, Vec<Line>)> = None;
-    loop {
-        match lines.pop() {
-            None => break,
-            Some(mut line) => {
-                siblings = match siblings {
-                    None => Some((line.indentation, vec![line])),
-                    Some((indentation, mut sibling_lines)) => {
-                        if line.indentation < indentation
-                            || line.indentation == indentation && !line.comma
-                        {
-                            for child in sibling_lines.into_iter().rev() {
-                                line.phrase.source_range.end = child.phrase.source_range.end;
-                                line.phrase.value.rest.push(child.phrase);
-                            }
-                            Some((line.indentation, vec![line]))
-                        } else {
-                            assert_eq!(line.indentation, indentation);
-                            assert!(line.comma);
-                            sibling_lines.push(line);
-                            Some((indentation, sibling_lines))
-                        }
-                    }
-                };
-                match siblings {
-                    None => unreachable!(),
-                    Some((indentation, _)) => {
-                        if indentation < min_indentation {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-    }
-    for line in siblings
-        .map(|t| t.1)
-        .unwrap_or(Vec::new())
-        .into_iter()
-        .rev()
-    {
-        lines.push(line);
-    }
-}
-
 impl Phrase<&str> {
-    pub fn parse(mut s: &str) -> Result<Located<Phrase<(&str, bool)>>, usize> {
-        let length = s.len();
-        let mut lines: Vec<Line> = Vec::new();
-        loop {
-            let (line, s1) = match line_phrase(s, length)? {
-                None => break,
-                Some(x) => x,
-            };
-            s = s1;
-            merge_lines(&mut lines, line.indentation + 1);
-            lines.push(line);
+    pub fn parse(s: &str) -> Result<Located<Phrase<(&str, bool)>>, usize> {
+        let (p, mut s1) = inner_phrase(skip_whitespace(s), s.len())?;
+        s1 = skip_whitespace(s1);
+        if s1.len() > 0 {
+            return Err(s.len() - s1.len());
         }
-        merge_lines(&mut lines, 0);
-        if lines.len() > 1 {
-            return Err(lines[1].phrase.source_range.start);
-        }
-        if lines.len() == 0 {
-            return Err(s.len());
-        }
-        Ok(lines.into_iter().next().unwrap().phrase)
+        Ok(p)
     }
 }
 
@@ -356,11 +242,14 @@ mod test {
     #[test]
     fn list() {
         assert_eq!(
-            parse_simple("x y z").unwrap(),
+            parse_simple("x (y) (z)").unwrap(),
             phrase(
-                0..5,
+                0..9,
                 Located::new(0..1, "x"),
-                vec![simple_atom(2, "y"), simple_atom(4, "z")]
+                vec![
+                    phrase(2..5, Located::new(3..4, "y"), vec![]),
+                    phrase(6..9, Located::new(7..8, "z"), vec![]),
+                ]
             )
         );
     }
@@ -371,19 +260,19 @@ mod test {
     }
 
     #[test]
-    fn semicolon() {
+    fn final_child() {
         assert_eq!(
-            parse_simple("a; b (c; d)").unwrap(),
+            parse_simple("a b (c d)").unwrap(),
             phrase(
-                0..11,
+                0..9,
                 Located::new(0..1, "a"),
                 vec![phrase(
-                    1..11,
-                    Located::new(3..4, "b"),
+                    2..9,
+                    Located::new(2..3, "b"),
                     vec![phrase(
-                        5..11,
-                        Located::new(6..7, "c"),
-                        vec![phrase(7..10, Located::new(9..10, "d"), vec![])]
+                        4..9,
+                        Located::new(5..6, "c"),
+                        vec![simple_atom(7, "d")]
                     )]
                 )]
             )

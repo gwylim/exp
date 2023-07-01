@@ -1,4 +1,10 @@
 [! Source: https://projecteuler.net/problem=5 ]
-let $gcd (fn $a $b; if (eq 0 b) a; gcd b; mod a b)
-let $lcm (fn $a $b; div (mul a b); gcd a b)
-loop (var $i 1) (var $r 1) (if (eq 21 i) r; next (add i 1); lcm r i)
+let ($gcd)
+  (fn ($a) ($b)
+  if (eq (0) b) (a)
+  gcd (b) mod (a) b)
+let ($lcm)
+  (fn ($a) ($b) div (mul (a) b) gcd (a) b)
+loop (var ($i) 1) (var ($r) 1)
+if (eq (21) i) (r)
+next (add (i) 1) lcm (r) i
