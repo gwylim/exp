@@ -27,6 +27,10 @@ pub enum Builtin {
     Not,
     ConcatBytes,
     NumberToBytes,
+    ShiftRight,
+    BinaryAnd,
+    BinaryOr,
+    BytesLength,
 }
 
 // TODO: maybe swap this around, return a word for each Builtin?
@@ -53,6 +57,10 @@ pub fn get_builtin(s: &str) -> Option<Builtin> {
         "not" => Some(Builtin::Not),
         "concat_bytes" => Some(Builtin::ConcatBytes),
         "number_to_bytes" => Some(Builtin::NumberToBytes),
+        "shift_right" => Some(Builtin::ShiftRight),
+        "binary_and" => Some(Builtin::BinaryAnd),
+        "binary_or" => Some(Builtin::BinaryOr),
+        "bytes_length" => Some(Builtin::BytesLength),
         _ => None,
     }
 }
@@ -80,6 +88,10 @@ pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) ->
         Builtin::Not => invoke_unary(not, argument_values),
         Builtin::ConcatBytes => invoke_binary(concat_bytes, argument_values),
         Builtin::NumberToBytes => invoke_unary(number_to_bytes, argument_values),
+        Builtin::ShiftRight => invoke_binary(shift_right, argument_values),
+        Builtin::BinaryAnd => invoke_binary(binary_and, argument_values),
+        Builtin::BinaryOr => invoke_binary(binary_or, argument_values),
+        Builtin::BytesLength => invoke_unary(bytes_length, argument_values),
     }
 }
 
@@ -106,6 +118,10 @@ pub fn arity(builtin: Builtin) -> usize {
         Builtin::Not => 2,
         Builtin::ConcatBytes => 2,
         Builtin::NumberToBytes => 1,
+        Builtin::ShiftRight => 2,
+        Builtin::BinaryAnd => 2,
+        Builtin::BinaryOr => 2,
+        Builtin::BytesLength => 1,
     }
 }
 
@@ -372,4 +388,20 @@ fn number_to_bytes(x: &i64) -> Vec<u8> {
         return result;
     }
     panic!("Invalid byte value");
+}
+
+fn shift_right(x: &i64, n: &i64) -> i64 {
+    *x >> *n
+}
+
+fn binary_and(x: &i64, y: &i64) -> i64 {
+    *x & *y
+}
+
+fn binary_or(x: &i64, y: &i64) -> i64 {
+    *x | *y
+}
+
+fn bytes_length<'a>(bytes: &Vec<u8>) -> i64 {
+    bytes.len() as i64
 }
