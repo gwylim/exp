@@ -1,4 +1,4 @@
-use crate::token::{InvalidTokenError, Keyword, Token};
+use crate::token::{InvalidTokenError, Token};
 use crate::{token, Phrase};
 use std::fmt;
 use std::fmt::Write;
@@ -23,24 +23,6 @@ fn new_line<W: Write>(indentation: usize, comma: bool, write: &mut W) -> fmt::Re
 
 fn format_token<W: Write>(token: &Token<(&str, bool)>, write: &mut W) -> fmt::Result {
     match token {
-        Token::Keyword(k) => write!(
-            write,
-            "{}",
-            match k {
-                Keyword::Let => "let",
-                Keyword::Match => "match",
-                Keyword::Data => "data",
-                Keyword::Case => "case",
-                Keyword::If => "if",
-                Keyword::Function => "fn",
-                Keyword::Loop => "loop",
-                Keyword::Next => "next",
-                Keyword::Unit => "unit",
-                Keyword::Tuple => "#",
-                Keyword::Array => "@",
-                Keyword::Var => "var",
-            }
-        ),
         Token::NumericLiteral(x) => write!(write, "{}", x),
         Token::StringLiteral((s, quoted)) => {
             if *quoted {
@@ -56,7 +38,7 @@ fn format_token<W: Write>(token: &Token<(&str, bool)>, write: &mut W) -> fmt::Re
                 write!(write, "false")
             }
         }
-        Token::Identifier((s, quoted)) => {
+        Token::Symbol((s, quoted)) => {
             if *quoted {
                 write!(write, "[{}]", s)
             } else {

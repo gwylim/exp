@@ -1,19 +1,15 @@
 mod builtin;
 mod eq;
-mod expr;
-mod format;
-mod interpreter;
-mod token;
+// mod format;
+mod eval;
 mod value;
 
-mod checks;
+mod expr;
 mod located;
-mod phrase;
 
-use crate::expr::{compile, ParseError};
-use crate::interpreter::run;
+use crate::eval::eval;
+use crate::expr::Expr;
 use crate::located::Located;
-use crate::phrase::Phrase;
 use crate::value::Value;
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -100,7 +96,7 @@ fn main() {
             let input = fs::read_to_string(file.clone()).expect("Failed to read file");
             match compile(&input) {
                 Ok(expr) => {
-                    let result = run(&expr).expect("Exception in execution");
+                    let result = eval(&expr).expect("Exception in execution");
                     match args.command {
                         Command::Run { .. } => {
                             println!("{}", result);

@@ -1,5 +1,5 @@
 use crate::eq::eq;
-use crate::value::{RunResult, RuntimeError, Value, VecType};
+use crate::value::{EvalResult, RuntimeError, Value, VecType};
 use std::collections::vec_deque::VecDeque;
 use std::io;
 use std::rc::Rc;
@@ -65,7 +65,7 @@ pub fn get_builtin(s: &str) -> Option<Builtin> {
     }
 }
 
-pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) -> RunResult {
+pub fn invoke_builtin(builtin: Builtin, argument_values: VecDeque<Rc<Value>>) -> EvalResult {
     match builtin {
         Builtin::Print => invoke_unary(print, argument_values),
         Builtin::Length => invoke_unary(len, argument_values),
@@ -193,52 +193,52 @@ impl<'a> ArgType<'a> for Vec<u8> {
 }
 
 trait ResultType<'a> {
-    fn to_result(self) -> RunResult<'a>;
+    fn to_result(self) -> EvalResult<'a>;
 }
 
 impl<'a> ResultType<'a> for Rc<Value<'a>> {
-    fn to_result(self) -> RunResult<'a> {
+    fn to_result(self) -> EvalResult<'a> {
         Ok(self)
     }
 }
 
 impl<'a, T: ResultType<'a>> ResultType<'a> for Result<T, RuntimeError> {
-    fn to_result(self) -> RunResult<'a> {
+    fn to_result(self) -> EvalResult<'a> {
         self?.to_result()
     }
 }
 
 impl<'a> ResultType<'a> for Value<'a> {
-    fn to_result(self) -> RunResult<'a> {
+    fn to_result(self) -> EvalResult<'a> {
         Ok(Rc::new(self))
     }
 }
 
 impl<'a> ResultType<'a> for i64 {
-    fn to_result(self) -> RunResult<'a> {
+    fn to_result(self) -> EvalResult<'a> {
         Ok(Rc::new(Value::Number(self)))
     }
 }
 
 impl<'a> ResultType<'a> for String {
-    fn to_result(self) -> RunResult<'a> {
+    fn to_result(self) -> EvalResult<'a> {
         Ok(Rc::new(Value::String(self)))
     }
 }
 
 impl<'a> ResultType<'a> for bool {
-    fn to_result(self) -> RunResult<'a> {
+    fn to_result(self) -> EvalResult<'a> {
         Ok(Rc::new(Value::Boolean(self)))
     }
 }
 
 impl<'a> ResultType<'a> for Vec<u8> {
-    fn to_result(self) -> RunResult<'a> {
+    fn to_result(self) -> EvalResult<'a> {
         Ok(Rc::new(Value::Bytes(self)))
     }
 }
 
-fn invoke_unary<'a, A: 'a, R, F>(f: F, args: VecDeque<Rc<Value<'a>>>) -> RunResult<'a>
+fn invoke_unary<'a, A: 'a, R, F>(f: F, args: VecDeque<Rc<Value<'a>>>) -> EvalResult<'a>
 where
     A: ArgType<'a>,
     R: ResultType<'a>,
@@ -251,7 +251,7 @@ where
     f(A::from_value(arg1.as_ref())?).to_result()
 }
 
-fn invoke_binary<'a, A: 'a, B: 'a, R, F>(f: F, args: VecDeque<Rc<Value<'a>>>) -> RunResult<'a>
+fn invoke_binary<'a, A: 'a, B: 'a, R, F>(f: F, args: VecDeque<Rc<Value<'a>>>) -> EvalResult<'a>
 where
     A: ArgType<'a>,
     B: ArgType<'a>,
@@ -272,7 +272,7 @@ where
 fn invoke_ternary<'a, A: 'a, B: 'a, C: 'a, R, F>(
     f: F,
     args: VecDeque<Rc<Value<'a>>>,
-) -> RunResult<'a>
+) -> EvalResult<'a>
 where
     A: ArgType<'a>,
     B: ArgType<'a>,

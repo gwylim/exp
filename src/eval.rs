@@ -1,18 +1,16 @@
 use crate::builtin;
 use crate::builtin::invoke_builtin;
-use crate::eq::eq;
-use crate::expr::{Declaration, Expr, PatternExpr};
-use crate::value::{Function, RunResult, RuntimeError, Value, VecType};
-use std::cell::RefCell;
+use crate::expr::Expr;
+use crate::located::Located;
+use crate::value::{Binding, EvalResult, Function, RuntimeError, SyntaxError, Value};
+use hex::FromHex;
 use std::collections::vec_deque::VecDeque;
-use std::iter::zip;
 use std::rc::Rc;
 
 fn apply<'a>(
-    label: &RefCell<u64>,
     function_value: Rc<Value<'a>>,
     argument_values: VecDeque<Rc<Value<'a>>>,
-) -> RunResult<'a> {
+) -> EvalResult<'a> {
     match &*function_value {
         Value::Apply {
             function,
@@ -32,7 +30,7 @@ fn apply<'a>(
                         .collect(),
                 }));
             }
-            let mut arguments_to_function: VecDeque<Rc<Value<'a>>> =
+            let mut arguments_to_function: VecDeque<(&'a str, Rc<Value<'a>>)> =
                 arguments.clone().into_iter().collect();
             let mut remaining_arguments: VecDeque<Rc<Value<'a>>> = VecDeque::new();
             for arg in argument_values {
@@ -44,39 +42,28 @@ fn apply<'a>(
             }
             let result = match function {
                 Function::Closure { body, env } => {
-                    arguments_to_function.extend(env.iter().map(|v| match **v {
-                        Value::Recurse => Rc::new((*function_value).clone()),
+                    arguments_to_function.extend(env.iter().map(|v| match *v {
+                        (s, &Value::Recurse) => (s, Rc::new((*function_value).clone())),
                         _ => v.clone(),
                     }));
-                    run_inner(label, body, &mut arguments_to_function)
+                    eval_inner(body, &mut arguments_to_function)
                 }
                 Function::Builtin(b) => invoke_builtin(*b, arguments_to_function),
-                Function::Constructor { .. } => {
-                    if !remaining_arguments.is_empty() {
-                        return Err(RuntimeError::AppliedNonFunction);
-                    }
-                    Ok(Rc::new(Value::Apply {
-                        function: function.clone(),
-                        arity: *arity,
-                        // TODO: we shouldn't create a new Vec here
-                        arguments: arguments_to_function.into_iter().collect(),
-                    }))
-                }
             }?;
             if remaining_arguments.is_empty() {
                 Ok(result)
             } else {
-                apply(label, result, remaining_arguments)
+                apply(result, remaining_arguments)
             }
         }
-        _ => Err(RuntimeError::AppliedNonFunction),
+        _ => Err(RuntimeError::TypeError),
     }
 }
 
 fn create_closure<'a>(
     arity: usize,
     body: &'a Expr,
-    parent_env: &VecDeque<Rc<Value<'a>>>,
+    parent_env: &VecDeque<Binding<'a>>,
 ) -> Value<'a> {
     Value::Apply {
         arity,
@@ -88,132 +75,38 @@ fn create_closure<'a>(
     }
 }
 
-fn match_pattern<'a>(
-    pattern: &'a PatternExpr,
-    value: &Rc<Value<'a>>,
-    stack: &VecDeque<Rc<Value<'a>>>,
-    matches: &mut Vec<Rc<Value<'a>>>,
-) -> Result<bool, RuntimeError> {
-    match pattern {
-        PatternExpr::BindVar => {
-            matches.push(value.clone());
-            Ok(true)
-        }
-        PatternExpr::Vec {
-            values: pattern_values,
-            vec_type,
-        } => {
-            if let Value::Vec {
-                values,
-                vec_type: vec_type1,
-            } = &**value
-            {
-                if *vec_type != *vec_type1 {
-                    return Err(RuntimeError::TypeError);
-                }
-                if pattern_values.len() != values.len() {
-                    return match vec_type {
-                        VecType::Array => Ok(false),
-                        VecType::Tuple => Err(RuntimeError::TypeError),
-                    };
-                }
-                let mut matched = true;
-                // We loop over all elements to catch any type errors
-                for (x, y) in zip(pattern_values, values) {
-                    if !match_pattern(x, y, stack, matches)? {
-                        matched = false;
-                    }
-                }
-                Ok(matched)
-            } else {
-                Err(RuntimeError::TypeError)
+fn eval_inner<'a>(expr: &'a Located<Expr>, stack: &mut VecDeque<Binding<'a>>) -> EvalResult<'a> {
+    match expr.value {
+        Expr::Atom(s) => {
+            let first: char = s.chars().nth(0).unwrap();
+            if first == '0' && s.chars().nth(1) == Some('x') {
+                let result = <Vec<u8>>::from_hex(&s[2..]);
+                return match result {
+                    Ok(x) => Ok(Rc::new(Value::Bytes(x))),
+                    Err(_) => Err(expr
+                        .with_value(RuntimeError::SyntaxError(SyntaxError::InvalidBytesLiteral))),
+                };
             }
-        }
-        PatternExpr::Constructed {
-            constructor,
-            arguments,
-        } => {
-            let constructor_value = &stack[*constructor];
-            if let Value::Apply {
-                function: Function::Constructor { type_id, index },
-                arity,
-                arguments: pattern_constructor_arguments,
-            } = &**constructor_value
-            {
-                if !pattern_constructor_arguments.is_empty() {
-                    return Err(RuntimeError::InvalidConstructorPattern);
-                }
-                if *arity != arguments.len() {
-                    return Err(RuntimeError::InvalidConstructorPattern);
-                }
-                if let Value::Apply {
-                    function:
-                        Function::Constructor {
-                            type_id: type_id1,
-                            index: index1,
-                        },
-                    arity: _,
-                    arguments: values,
-                } = &**value
-                {
-                    if type_id != type_id1 {
-                        return Err(RuntimeError::TypeError);
-                    }
-                    if index != index1 {
-                        return Ok(false);
-                    }
-                    let mut matched = true;
-                    for (pattern, value) in zip(arguments, values) {
-                        if !match_pattern(pattern, value, stack, matches)? {
-                            matched = false;
-                        }
-                    }
-                    Ok(matched)
-                } else {
-                    Err(RuntimeError::TypeError)
+            if first.is_numeric() || first == '-' {
+                let result = s.parse::<i64>();
+                match result {
+                    Ok(x) => Ok(Rc::new(Value::Number(x))),
+                    Err(_) => Err(expr.with_value(RuntimeError::SyntaxError(
+                        SyntaxError::InvalidNumericLiteral,
+                    ))),
                 }
             } else {
-                Err(RuntimeError::InvalidConstructorPattern)
+                todo!()
             }
         }
-        e => {
-            let matched = match e {
-                PatternExpr::NumericConstant(n) => eq(&Value::Number(*n), &*value),
-                PatternExpr::StringConstant(s) => {
-                    // We don't call eq here to avoid having to clone the string
-                    if let Value::String(s1) = &**value {
-                        Ok(s == s1)
-                    } else {
-                        Err(RuntimeError::TypeError)
-                    }
-                }
-
-                PatternExpr::BooleanConstant(b) => eq(&Value::Boolean(*b), &*value),
-                PatternExpr::Unit => eq(&Value::Unit, &*value),
-                PatternExpr::Bound(i) => eq(&stack[*i], &*value),
-                PatternExpr::BindVar => unreachable!(),
-                PatternExpr::Vec {
-                    values: _,
-                    vec_type: _,
-                } => unreachable!(),
-                PatternExpr::Constructed { .. } => unreachable!(),
-            }?;
-            Ok(matched)
-        }
+        Expr::Cons(a, b) => match *a.value {
+            Expr::Atom(s) => {
+                todo!()
+            }
+            _ => Err(),
+        },
     }
-}
-
-fn create_id(unique_id: &RefCell<u64>) -> u64 {
-    let next_id = unique_id.take();
-    unique_id.replace(next_id + 1);
-    next_id
-}
-
-fn run_inner<'a>(
-    unique_id: &RefCell<u64>,
-    expr: &'a Expr,
-    stack: &mut VecDeque<Rc<Value<'a>>>,
-) -> RunResult<'a> {
+    /*
     match expr {
         &Expr::Function { arity, ref body } => Ok(Rc::new(create_closure(arity, body, stack))),
         &Expr::Bound(i) => Ok(stack[i].clone()),
@@ -221,12 +114,12 @@ fn run_inner<'a>(
             function,
             arguments,
         } => {
-            let function_value = run_inner(unique_id, function, stack)?;
+            let function_value = run_inner(function, stack)?;
             let mut argument_values = VecDeque::new();
             for argument in arguments {
-                argument_values.push_back(run_inner(unique_id, argument, stack)?);
+                argument_values.push_back(run_inner(argument, stack)?);
             }
-            apply(unique_id, function_value, argument_values)
+            apply(function_value, argument_values)
         }
         &Expr::NumericConstant(x) => Ok(Rc::new(Value::Number(x))),
         Expr::StringConstant(s) => Ok(Rc::new(Value::String(s.to_string()))),
@@ -244,93 +137,44 @@ fn run_inner<'a>(
                 match decl {
                     Declaration::Let(value) => {
                         stack.push_front(Rc::new(Value::Recurse));
-                        stack[0] = run_inner(unique_id, &value, stack)?;
+                        stack[0] = run_inner(&value, stack)?;
                         var_count += 1;
-                    }
-                    Declaration::Type(constructors) => {
-                        // TODO: It might make more sense to assign this id when compiling rather than here
-                        let type_id = create_id(unique_id);
-                        for (index, arity) in constructors.iter().enumerate() {
-                            stack.push_front(Rc::new(Value::Apply {
-                                arity: *arity,
-                                arguments: Vec::new(),
-                                function: Function::Constructor { type_id, index },
-                            }));
-                        }
-                        var_count += constructors.len();
                     }
                 }
             }
-            let result = run_inner(unique_id, &body, stack);
+            let result = run_inner(&body, stack);
             for _ in 0..var_count {
                 stack.pop_front();
             }
             result
-        }
-        Expr::Vec { values, vec_type } => {
-            let mut result = Vec::new();
-            for e in values {
-                result.push(run_inner(unique_id, e, stack)?);
-            }
-            Ok(Rc::new(Value::Vec {
-                values: result,
-                vec_type: *vec_type,
-            }))
         }
         Expr::If {
             condition,
             true_branch,
             false_branch,
         } => {
-            let condition_result = run_inner(unique_id, condition, stack)?;
+            let condition_result = run_inner(condition, stack)?;
             match &*condition_result {
                 Value::Boolean(b) => {
                     if *b {
-                        run_inner(unique_id, true_branch, stack)
+                        run_inner(true_branch, stack)
                     } else {
-                        run_inner(unique_id, false_branch, stack)
+                        run_inner(false_branch, stack)
                     }
                 }
                 _ => Err(RuntimeError::TypeError),
             }
         }
-        Expr::Match { value, cases } => {
-            let evaluated_value = run_inner(unique_id, value, stack)?;
-            let mut matched_case = None;
-            for (pattern, body) in cases {
-                let mut matches = Vec::new();
-                let matched = match_pattern(pattern, &evaluated_value, stack, &mut matches)?;
-                if matched {
-                    if matched_case.is_some() {
-                        return Err(RuntimeError::MultiplePatternsMatched);
-                    }
-                    matched_case = Some((body, matches));
-                }
-            }
-            if matched_case.is_none() {
-                return Err(RuntimeError::NoPatternsMatched);
-            }
-            let (body, matches) = matched_case.unwrap();
-            let var_count = matches.len();
-            for v in matches {
-                stack.push_front(v);
-            }
-            let result = run_inner(unique_id, body, stack);
-            for _ in 0..var_count {
-                stack.pop_front();
-            }
-            result
-        }
         Expr::Loop { initial_vars, body } => {
             let mut vars = Vec::new();
             for var in initial_vars {
-                vars.push(run_inner(unique_id, var, stack)?);
+                vars.push(run_inner(var, stack)?);
             }
             for var in vars {
                 stack.push_front(var);
             }
             loop {
-                let result = run_inner(unique_id, body, stack)?;
+                let result = run_inner(body, stack)?;
                 for _ in 0..initial_vars.len() {
                     stack.pop_front();
                 }
@@ -347,21 +191,22 @@ fn run_inner<'a>(
         Expr::Next(arguments) => {
             let mut args = Vec::new();
             for arg in arguments {
-                args.push(run_inner(unique_id, arg, stack)?);
+                args.push(run_inner(arg, stack)?);
             }
             Ok(Rc::new(Value::Next(args)))
         }
     }
+     */
 }
 
-pub fn run(expr: &Expr) -> RunResult {
-    run_inner(&mut RefCell::new(0), expr, &mut VecDeque::new())
+pub fn eval<'a>(expr: &'a Expr) -> EvalResult<'a> {
+    eval_inner(expr, &mut VecDeque::new())
 }
 
 #[cfg(test)]
 mod test {
-    use crate::expr::compile;
-    use crate::run;
+    use crate::eval;
+    use crate::expr::Expr;
     use crate::value::{RuntimeError, Value};
 
     // We pass a callback since the Expr doesn't live past this function and isn't owned by the
@@ -370,11 +215,11 @@ mod test {
     where
         F: Fn(&Value),
     {
-        f(&*run(&compile(s).unwrap()).unwrap())
+        f(&*eval(&Expr::parse(s).unwrap()).unwrap())
     }
 
     fn eval_error(s: &str) -> RuntimeError {
-        run(&compile(s).unwrap()).unwrap_err()
+        eval(&compile(s).unwrap()).unwrap_err()
     }
 
     #[test]

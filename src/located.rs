@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 /// Represents a value with a location in source code
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone)]
 pub struct Located<T> {
     pub source_range: Range<usize>,
     pub value: T,
