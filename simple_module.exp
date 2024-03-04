@@ -1,0 +1,115 @@
+let ($error) (fn ($x) eq (0) 0x)
+let ($encode_unsigned_leb128) (
+  fn ($x)
+  loop (var ($x1) x) (var ($r) 0x)
+  if (leq (x1) 127) (
+    concat_bytes (r)
+    number_to_bytes x1
+  )
+  next (shift_right (x1) 7)
+  concat_bytes (r)
+  number_to_bytes
+  binary_or (128)
+  binary_and (x1)
+  127
+)
+let ($encode_u32) (
+  fn ($x)
+  if (
+    or (leq (x) -1) leq (4294967296) x
+  ) (error 0)
+  encode_unsigned_leb128 x
+)
+let ($reduce) (
+  fn ($a) ($f) ($arr)
+  let ($l) (length arr)
+  loop (var ($i) 0) (var ($r) a)
+  if (leq (l) i) (r)
+  next (add (1) i)
+  f (r) get (arr) i
+)
+let ($map) (
+  fn ($f)
+  reduce (@)
+  fn ($r) ($x)
+  concat (r)
+  @ f x
+)
+let ($vec) (
+  fn ($values)
+  concat_bytes (encode_u32 length values)
+  reduce (0x) (concat_bytes) values
+)
+let ($section) (
+  fn ($id) ($contents)
+  concat_bytes (number_to_bytes id)
+  let ($length) (bytes_length contents)
+  concat_bytes (encode_u32 length)
+  contents
+)
+let ($type_section) (section 1)
+let ($function_section) (section 3)
+let ($code_section) (section 10)
+let ($const_i32) (
+  fn ($x)
+  concat_bytes (0x41)
+  encode_u32 x
+)
+let ($local_get) (
+  fn ($idx)
+  concat_bytes (0x20)
+  encode_u32 idx
+)
+let ($local_set) (
+  fn ($idx)
+  concat_bytes (0x21)
+  encode_u32 idx
+)
+let ($i32_type) (0x7f)
+let ($function_type) (
+  fn ($argument_types) ($result_types)
+  concat_bytes (0x60)
+  concat_bytes (vec argument_types)
+  vec result_types
+)
+let ($expr) (
+  fn ($instructions)
+  concat_bytes (vec instructions)
+  0x0b
+)
+let ($function) (
+  fn ($i32_local_count) ($instructions)
+  let ($locals) (
+    vec @
+    concat_bytes (encode_u32 i32_local_count)
+    i32_type
+  )
+  let ($func) (
+    concat_bytes (locals)
+    expr instructions
+  )
+  let ($l) (bytes_length func)
+  concat_bytes (encode_u32 l) func
+)
+let ($magic) (0x0061736d)
+let ($version) (0x01000000)
+let ($module) (
+  fn ($sections)
+  concat_bytes (magic)
+  concat_bytes (version)
+  reduce (0x) (concat_bytes) sections
+)
+module @
+(
+  type_section
+  vec
+  @ function_type (@ i32_type) @ i32_type
+) (
+  function_section
+  vec
+  @ [! i32 -> i32] encode_u32 0
+) (
+  code_section
+  vec
+  @ function (1) @ const_i32 12
+)

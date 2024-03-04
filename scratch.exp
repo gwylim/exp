@@ -1,0 +1,103 @@
+let f (fn x x) (f; concat_string [abc] [def])
+
+let (f, fn (x) x)
+f concat_string ([abc], [def])
+
+let (f, fn (x) x) f concat_string ([abc]) [def]
+
+(f, (x) fn x) in (([abc]) concat_string [def]) f
+
+f is (x fn x)
+
+print str [hello, world]
+
+call (string eq, [abc]) [def]
+
+let (x)
+  [string:is equal] (str [def], str [abc])
+
+string:eq
+
+import
+  string
+, alias (eq) my_eq
+, monoid (self, alias (add) concat) empty
+
+let (my_mod, end)
+
+[
+  Module definition:
+
+  mod <name> <expression>
+
+  End expression:
+
+  end [<default export expr>] <expression>
+
+  Module import:
+
+  import <name> [<name imports>] <expression>
+
+  Aliases for externally defined module:
+
+  alias <name imports> <expression>
+
+  e.g.
+
+  alias (int (add, monoid (self, empty, append append_alias)))
+
+  Can just support external modules for now, defining modules in the
+  same file is a special case anyway.
+]
+
+mod (my_mod)
+  let (x) 5
+  let (pub public_x) x
+  data (pub list)
+    pub nil
+  , pub cons (box, box)
+  let (default_export_value) add (x) x
+end (default_export_value)
+
+mod (mod_without_default)
+  
+let
+  rem ([Concatenate two lists])
+  pub
+  concat
+, fn (xs, ys)
+  match (xs)
+    case (nil end) ys
+  , case (cons (x) xs) cons (x) concat (xs) ys
+
+let (f)
+  fn (x) call (ref add, ref x, ref x)
+
+let (f)
+  fn (x) add (x) x
+
+macro (make_list)
+  fn (children)
+  loop (var result list:nil) (var i 0)
+  if (int:eq (i) array:size children)
+    result
+  let (child)
+    array:get children (sub (list:size children) add (1) i)
+  next (list:cons (child) result) (add (1) i)
+
+struct (foo)
+  parent (std:weak_ptr foo)
+  child (std:shared_ptr foo)
+let (p, std:shared_ptr foo)
+  std:make_shared foo
+let (q, std:shared_ptr foo)
+  std:make_shared foo
+set (p child, q)
+set (q parent, p)
+
+fac let (
+  n fn
+  0 leq (n) then (1).
+  n mul
+  (n sub (1) fac)
+).
